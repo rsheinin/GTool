@@ -1,0 +1,42 @@
+==================================================================
+This is GT_TEAM repository.
+==================================================================
+
+***************************
+Main branch is : master
+***************************
+	
+------------------------------------------------------------------
+branches name policy:
+------------------------------------------------------------------ 
+	<feature/change info>_<user name>
+	for example  - latency-tool_erosenbe
+	
+	
+------------------------------------------------------------------
+branches model:
+------------------------------------------------------------------ 
+	git checkout master 
+	git pull origin
+	… make your changes …
+	git checkout -b <your-feature>_<user_name>
+	git merge master #### master have to be update with latest code ####
+	git add <your_files>
+	git commit -m “meaningful comment”
+	git push origin –u <your-feature>_<user_name>
+	
+	
+------------------------------------------------------------------
+Pull request mechanizm (to main branch): 
+------------------------------------------------------------------
+	https://www.visualstudio.com/en-us/docs/git/pull-requests
+	
+	Required at least 2 reviewers .
+	
+	
+------------------------------------------------------------------
+Folders policies:
+------------------------------------------------------------------
+	- All 3rdpaty libraries should be in the 3rdparty folder.
+	- every tool should be in its own folder. 
+	- folder name should be the most generic (for future changes) and meaningful.

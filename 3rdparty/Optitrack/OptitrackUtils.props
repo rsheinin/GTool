@@ -1,0 +1,36 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ImportGroup Label="PropertySheets" />
+  <PropertyGroup Label="UserMacros">
+    <OptitrackDir>$(SolutionDir)..\3rdparty\Optitrack</OptitrackDir>
+  </PropertyGroup>
+  <!--<PropertyGroup>
+    <LocalDebuggerEnvironment>PATH=$(OPENCV2410Dir)\$(PlatformShortName)\vc12\bin;%PATH%
+$(LocalDebuggerEnvironment)</LocalDebuggerEnvironment>
+  </PropertyGroup>-->
+  <PropertyGroup />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(OptitrackDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(OptitrackDir)\lib\$(PlatformShortName);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+  <!--<ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <Link>
+      <AdditionalDependencies>$(OPENCV2410Dir)\$(PlatformShortName)\vc12\lib\opencv_*2410d.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>-->
+  <ItemDefinitionGroup>
+    <Link>
+      <AdditionalDependencies>NatNetLibStatic.lib;WS2_32.Lib;%(AdditionalDependencies)</AdditionalDependencies>
+	  <!--<AdditionalDependencies>NatNetLib.lib;%(AdditionalDependencies)</AdditionalDependencies>-->
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <BuildMacro Include="OptitrackDir">
+      <Value>$(OptitrackDir)</Value>
+    </BuildMacro>
+  </ItemGroup>
+</Project>
