@@ -118,12 +118,19 @@ namespace OptitrackUtils{
 			EY,
 			EZ,
 
+			NMARKERS_Blank,
+			NMARKERS_OtherMarkers,
+			NMARKERS_LabeledMarkers,
+			NMARKERS_Rigid,
+
 			ERR,
 
 			RB_ID/* = 0*/,
 			TIMESTAMP,
 			FRAMENUMBER,
 			ISTRACKED,
+
+
 
 
 			POSESIZE
@@ -187,6 +194,7 @@ namespace OptitrackUtils{
 		void printColoredText(std::string str, int color = 15);
 		void writeTitles(std::ofstream* fp);
 		bool writeFrame(std::ofstream* fp, double* pose, double ts, int frame_number);
+		bool writeFrame(std::ofstream* fp, double* pose, double ts, int frame_number, int* nmarkers);
 		extern std::ofstream* calibrationFile;
 		extern HANDLE hConsole;
 		extern FILE* fp;

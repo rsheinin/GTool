@@ -706,7 +706,14 @@ void __cdecl Connection::DataHandler(sFrameOfMocapData* data, void* pUserData)
 				}
 
 				//std::cout << "before writing line to " << rb_name << " RB file" << std::endl;
-				if (!Output::writeFrame(Output::getFilePtrById(rb_pose[Data::PoseStruct::RB_ID]), rb_pose, ts, frameN))
+				data->nOtherMarkers;
+				data->nLabeledMarkers;
+				data->RigidBodies[0].nMarkers;
+
+				int namrkers[] = { Data::lastFrame->nOtherMarkers, Data::lastFrame->nLabeledMarkers, Data::lastFrame->RigidBodies[i].nMarkers };
+
+				// if (!Output::writeFrame(Output::getFilePtrById(rb_pose[Data::PoseStruct::RB_ID]), rb_pose, ts, frameN))
+				if (!Output::writeFrame(Output::getFilePtrById(rb_pose[Data::PoseStruct::RB_ID]), rb_pose, ts, frameN, namrkers))
 				{
 					std::cout << "can not write to file of rb " << rb_name << std::endl;
 				}
@@ -882,7 +889,8 @@ void Output::printColoredText(std::string str, int color)
 
 void Output::writeTitles(std::ofstream* fp)
 {
-	*fp << "object_id,timestamp,frame_number,tracked,r_0,r_1,r_2,x,r_3,r_4,r_5,y,r_6,r_7,r_8,z,error,qx,qy,qz,qw\n"/*,pitch,yaw,roll\n*/;
+	//*fp << "object_id,timestamp,frame_number,tracked,r_0,r_1,r_2,x,r_3,r_4,r_5,y,r_6,r_7,r_8,z,error,qx,qy,qz,qw\n"/*,pitch,yaw,roll\n*/;
+	*fp << "object_id,timestamp,frame_number,tracked,r_0,r_1,r_2,x,r_3,r_4,r_5,y,r_6,r_7,r_8,z,error,qx,qy,qz,qw,,,,,,,\n"/*,pitch,yaw,roll\n*/;
 }
 
 bool Output::writeFrame(std::ofstream* fp, double* pose, double ts, int frame_muber)
@@ -919,6 +927,53 @@ bool Output::writeFrame(std::ofstream* fp, double* pose, double ts, int frame_mu
 	{
 	*fp << pose[i] << " ";
 	}*/
+
+	*fp << std::endl;
+
+	return true;
+}
+
+bool Output::writeFrame(std::ofstream* fp, double* pose, double ts, int frame_muber, int* nmarkers)
+{
+	if (fp == NULL || pose == NULL)
+		return false;
+
+	//std::cout << "in writeFrame function" << std::endl;
+
+	std::cout.precision(12);
+	*fp << std::fixed << pose[Data::PoseStruct::RB_ID] << ",";
+	*fp << ts << ",";
+	//std::cout.precision(0);
+	*fp << frame_muber << ",";
+	*fp << pose[Data::PoseStruct::ISTRACKED] << ",";
+
+	//rotation matrix
+	for (int i = Data::PoseStruct::R0; i <= Data::PoseStruct::TZ; i++)
+	{
+		*fp << pose[i] << ",";
+	}
+
+	//mean error
+	*fp << pose[Data::PoseStruct::ERR];
+
+	//quaternion
+	for (int i = Data::PoseStruct::QX; i <= Data::PoseStruct::QW; i++)
+	{
+		*fp << "," << pose[i];
+	}
+
+	////Euler angles
+	//for (int i = Data::PoseStruct::EX; i <= Data::PoseStruct::EZ; i++)
+	//{
+	//	*fp << pose[i] << ",";
+	//}
+
+	*fp << ",";
+
+	for (int i = 0; i < Data::PoseStruct::NMARKERS_Rigid - Data::PoseStruct::NMARKERS_Blank; i++)
+	{
+		*fp << nmarkers[i] << ",";
+	}
 
 	*fp << std::endl;
 

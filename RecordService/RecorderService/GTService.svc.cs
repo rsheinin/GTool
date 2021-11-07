@@ -19,7 +19,8 @@ namespace RecorderService
         public static string classToUse;
         public static string trackingSystem;
         public static GTData gtData;
-        public static string outputPath = @"..\..\..\..\output\OptitrackResults\PosesFiles";
+        // public static string outputPath = @"..\..\..\..\output\OptitrackResults\PosesFiles";
+        public static string outputPath = @"F:\GTService\output\OptitrackResults\PosesFiles";
         public static string outputFolder = string.Empty;
         //output folder in relative to shared path on server (local machine of service)
         public static string outputFolderRelative = string.Empty;
@@ -27,10 +28,17 @@ namespace RecorderService
         public static Assembly asm;
         public static Type type;
         private static string RBName = string.Empty;
-        private const string ghcFolder = @"..\..\..\..\..\HandEyeCalibrationService\GHCFiles";
-        private const string libFolder = @"..\..\..\..\..\Common\GTUtils";
-        private const string helpScriptsFolder = @"..\..\..\..\..\help_scripts";
-        private const string PostProcessingFolder = @"..\..\..\..\..\PostProcessing\";
+
+        //private const string rel2gtoolFolder = @"..\..";
+        private const string rel2gtoolFolder = @"..\..\..\..\..";
+        private const string ghcFolder = rel2gtoolFolder + @"\HandEyeCalibrationService\GHCFiles";
+        private const string libFolder = rel2gtoolFolder + @"\Common\GTUtils";
+        private const string helpScriptsFolder = rel2gtoolFolder + @"\help_scripts";
+        private const string PostProcessingFolder = rel2gtoolFolder + @"\PostProcessing\";
+        //private const string ghcFolder = @"..\..\..\..\..\HandEyeCalibrationService\GHCFiles";
+        //private const string libFolder = @"..\..\..\..\..\Common\GTUtils";
+        //private const string helpScriptsFolder = @"..\..\..\..\..\help_scripts";
+        //private const string PostProcessingFolder = @"..\..\..\..\..\PostProcessing\";
         private const string rubbishValue = "na";
 
         public static void initReflection()
