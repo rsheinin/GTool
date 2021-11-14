@@ -8,7 +8,6 @@ from scipy import interpolate
 from scipy.optimize import minimize
 import scipy.signal
 
-
 import os, os.path as osp
 import re
 import pickle
@@ -175,7 +174,7 @@ class DataReader:
             for key, val in zip(*DataReader.read_frame_(pkl, keys)):
                 data[key] += [val]
 
-        return { k: np.asarray(v) for k, v in data.items() }
+        return {k: np.asarray(v) for k, v in data.items()}
         # todo: convertto np?
         return data
 
@@ -258,19 +257,18 @@ class Trajectory:
 
 
 def calc_imu_rotation(accel_ts, accel, gyro_ts, gyro):
-    
     gyro_sec_diff = np.diff(np.asarray(gyro_ts)) / 1000
     gyro_euler = (np.asarray(gyro)[1:] * gyro_sec_diff[..., None])
 
     z = np.arctan2(accel[:, 1], accel[:, 2])
     x = np.arctan2(accel[:, 0], (accel[:, 1] ** 2 + accel[:, 2] ** 2) ** 0.5)
     accel_euler = np.asarray([_ for _ in zip(x, itertools.repeat(0), z)])
-        
+
     alpha = 0.99
     alpha = 0.90
     alpha = 0.98
     accel_alpha = np.asarray([alpha, 1, alpha])
-    accel_beta = np.asarray([1-alpha, 0, 1-alpha])
+    accel_beta = np.asarray([1 - alpha, 0, 1 - alpha])
 
     gyro_xyz_idx = [2, 1, 0]
     gyro_coeff = np.asarray([-1, -1, 1])
@@ -308,7 +306,6 @@ def calc_imu_rotation(accel_ts, accel, gyro_ts, gyro):
 
 
 def temporal_diff(ts1, traj1, ts2, traj2):
-
     def func_ta(x, t1, t2, d1, d2):
         slerp = Slerp(t2, R.from_matrix(d2[:, :3, :3]))
         new_ts = np.asarray(t1) + x
@@ -317,7 +314,6 @@ def temporal_diff(ts1, traj1, ts2, traj2):
 
         return np.linalg.norm(Utils.matrix2mag(d1[mask]) - Utils.matrix2mag(interp))
 
-
         a = Utils.matrix2mag(d1[mask])
         b = Utils.matrix2mag(interp)
 
@@ -325,12 +321,11 @@ def temporal_diff(ts1, traj1, ts2, traj2):
         a = a[s:e]
         b = b[s:e]
 
-        return np.linalg.norm((a-a.max()) - (b-b.max()))
-        return Utils.RMSe((a-a.max()) - (b-b.max()))
+        return np.linalg.norm((a - a.max()) - (b - b.max()))
+        return Utils.RMSe((a - a.max()) - (b - b.max()))
         return Utils.RMSe(Utils.matrix2mag(d1[mask]) - Utils.matrix2mag(interp))
 
-
-    res = minimize(func_ta, 0, (ts1-ts1[0], ts2-ts2[0], traj1, traj2), method='Nelder-Mead')    # good!!! # [3347.734]
+    res = minimize(func_ta, 0, (ts1 - ts1[0], ts2 - ts2[0], traj1, traj2), method='Nelder-Mead')  # good!!! # [3347.734]
 
     # # ts1[i] - ts1[0] + res.x = ts2[i] - t2[0]
     # ts1[i] = ts2[i] + (ts1[0] - ts2[0] - res.x)
@@ -340,13 +335,11 @@ def temporal_diff(ts1, traj1, ts2, traj2):
 
 def temporal_diff2(ts1, traj1, ts2, traj2):
     def func_ta(x, t1, t2, d1, d2):
-
         bias, scale = x
         new_ts = t2 * scale + bias
         slerp = Slerp(new_ts, R.from_matrix(d2[:, :3, :3]))
         mask = (t1 > new_ts[0]) & (t1 < new_ts[-1])
         interp = slerp(t1[mask]).as_matrix()
-
 
         return np.linalg.norm(Utils.matrix2mag(d1[mask]) - Utils.matrix2mag(interp))
 
@@ -354,7 +347,8 @@ def temporal_diff2(ts1, traj1, ts2, traj2):
         return Utils.RMSe((a - a.max()) - (b - b.max()))
         return Utils.RMSe(Utils.matrix2mag(d1[mask]) - Utils.matrix2mag(interp))
 
-    res = minimize(func_ta, [0, 1], (ts1 - ts1[0], ts2 - ts2[0], traj1, traj2), method='Nelder-Mead')  # good!!! # [3347.734]
+    res = minimize(func_ta, [0, 1], (ts1 - ts1[0], ts2 - ts2[0], traj1, traj2),
+                   method='Nelder-Mead')  # good!!! # [3347.734]
 
     # # # # ts1 - ts1[0] = (ts2 - ts2[0]) * scale + bias
     # # # ts1[i] - ts1[0] = ts2[i]*scale - ts2[0]*scale + bias
@@ -362,24 +356,21 @@ def temporal_diff2(ts1, traj1, ts2, traj2):
     # ts1[i] = ts2[i]*scale + bias + ts1[0] - ts2[0]*scale
 
     bias, scale = res.x
-    return bias + ts1[0] - ts2[0]*scale, scale
+    return bias + ts1[0] - ts2[0] * scale, scale
 
 
 def temporal_diff3(ts1, traj1, ts2, traj2):
-
     def func_ta(x, t1, t2, d1, d2):
-
         bias, scale = x
         slerp = Slerp(t2, R.from_matrix(d2[:, :3, :3]))
         new_ts = np.asarray(t1) + bias
         mask = (new_ts > t2[0]) & (new_ts < t2[-1])
         interp = slerp(new_ts[mask]).as_matrix()
 
-        return np.linalg.norm(Utils.matrix2mag(d1[mask])*scale - Utils.matrix2mag(interp))
+        return np.linalg.norm(Utils.matrix2mag(d1[mask]) * scale - Utils.matrix2mag(interp))
 
-
-
-    res = minimize(func_ta, [0, 1], (ts1-ts1[0], ts2-ts2[0], traj1, traj2), method='Nelder-Mead')    # good!!! # [3347.734]
+    res = minimize(func_ta, [0, 1], (ts1 - ts1[0], ts2 - ts2[0], traj1, traj2),
+                   method='Nelder-Mead')  # good!!! # [3347.734]
 
     # # ts1[i] - ts1[0] + res.x = ts2[i] - t2[0]
     # ts1[i] = ts2[i] + (ts1[0] - ts2[0] - res.x)
@@ -390,10 +381,8 @@ def temporal_diff3(ts1, traj1, ts2, traj2):
 
 
 def temporal_diff4(ts1, traj1, ts2, traj2):
-
     # fix imu drift and scale
     def func_ta1(x, t1, t2, d1, d2):
-
         time_bias, mag_scale, drift_bias, drift_scale = x
 
         new_t2 = t2 + time_bias
@@ -404,10 +393,8 @@ def temporal_diff4(ts1, traj1, ts2, traj2):
         return np.linalg.norm(new_d1[mask] - interp)
         return Utils.RMSe(new_d1[mask] - interp)
 
-
     # time bias and scale
     def func_ta2(x, t1, t2, d1, d2):
-
         time_bias, time_scale = x
 
         new_t2 = t2 * time_scale + time_bias
@@ -417,17 +404,16 @@ def temporal_diff4(ts1, traj1, ts2, traj2):
         return np.linalg.norm(d1[mask] - interp)
         return Utils.RMSe(d1[mask] - interp)
 
-
-
     d1_ = Utils.matrix2mag(traj1)
     d2_ = scipy.signal.medfilt(Utils.matrix2mag(traj2), 9)
     # res = minimize(func_ta1, [0, 1, 0, 1], (ts1-ts1[0], ts2-ts2[0], d1_, d2_), method='Nelder-Mead')    # good!!! # [3347.734]
     # # res = minimize(func_ta1, [0, 1, 0, 1], (ts1-ts1[0] + 500, ts2-ts2[0], d1_, d2_), method='Nelder-Mead')    # good!!! # [3347.734]
     # # # res = minimize(func_ta1, [0, 1, 0, 1], (ts1[:15*30]-ts1[0] + 1000, ts2-ts2[0], d1_[:15*30], d2_), method='Nelder-Mead')    # good!!! # [3347.734]
-    res = minimize(func_ta1, [0, 1, 0, 1], (1000 + ts1-ts1[0], ts2-ts2[0], d1_, d2_), method='Nelder-Mead')    # good!!! # [3347.734]
+    res = minimize(func_ta1, [0, 1, 0, 1], (1000 + ts1 - ts1[0], ts2 - ts2[0], d1_, d2_),
+                   method='Nelder-Mead')  # good!!! # [3347.734]
 
-    t1, t2 = ts1-ts1[0], ts2-ts2[0]
-    t1, t2 = ts1-ts1[0] + 1000, ts2-ts2[0]
+    t1, t2 = ts1 - ts1[0], ts2 - ts2[0]
+    t1, t2 = ts1 - ts1[0] + 1000, ts2 - ts2[0]
     time_bias, mag_scale, drift_bias, drift_scale = res.x
     new_t2 = t2 + time_bias
     new_d1 = d1_ * mag_scale + (ts1 - ts1[0]) * drift_scale + drift_bias
@@ -441,22 +427,23 @@ def temporal_diff4(ts1, traj1, ts2, traj2):
 
     s = 10
 
-    f1 = s*1
-    v1_ = (d1_[f1:]-d1_[:-f1]) / (ts1[f1:]-ts1[:-1*f1])
+    f1 = s * 1
+    v1_ = (d1_[f1:] - d1_[:-f1]) / (ts1[f1:] - ts1[:-1 * f1])
 
-    f2 = s*8
-    v2_ = (d2_[f2:]-d2_[:-f2]) / (ts2[f2:]-ts2[:-f2])
+    f2 = s * 8
+    v2_ = (d2_[f2:] - d2_[:-f2]) / (ts2[f2:] - ts2[:-f2])
 
     v_thresh = 0.014 * 0.001
     start1 = np.argmax(v1_ > v_thresh) + f1
     start2 = np.argmax(v2_ > v_thresh) + f2
 
     sec = 15
-    end1 = min(len(ts1)-1, start1 + sec*30)
-    end2 = min(len(ts2)-1, start2 + sec*240)
+    end1 = min(len(ts1) - 1, start1 + sec * 30)
+    end2 = min(len(ts2) - 1, start2 + sec * 240)
 
     # res = minimize(func_ta2, [time_bias, 1], (ts1[start1:end1]-ts1[0], ts2[start2:end2]-ts2[0], new_d1[start1:end1], d2_[start2:end2]), method='Nelder-Mead')
-    res = minimize(func_ta2, [time_bias, 1], (ts1[start1:end1]-ts1[0], ts2[start2:end2]-ts2[0], new_d1, d2_), method='Nelder-Mead')
+    res = minimize(func_ta2, [time_bias, 1], (ts1[start1:end1] - ts1[0], ts2[start2:end2] - ts2[0], new_d1, d2_),
+                   method='Nelder-Mead')
 
     time_bias, time_scale = res.x
 
@@ -467,6 +454,8 @@ def temporal_diff4(ts1, traj1, ts2, traj2):
 
     # bias + ts1[0] - ts2[0] * scale
     return time_bias - ts2[0] * time_scale + ts1[0], time_scale  # time to add to t2 clock
+
+
 # def temporal_diff4(ts1, traj1, ts2, traj2):
 #
 #     def func_ta(x, t1, t2, d1, d2):
@@ -541,9 +530,69 @@ def temporal_diff4(ts1, traj1, ts2, traj2):
 
 
 post_process_S, post_process_M = 300, 600
+p1_sec, p2_sec, p3_sec = 3.5, 7.5, 5
+
+
+def find_static_phase(t, d, interval_sec=0.5, seq_min_sec_len=0.5, d_ker=3):
+
+    sec2msec = 1000
+
+    t_with_delta_for_v = t + interval_sec * sec2msec
+    mask_v = t_with_delta_for_v < t.max()
+    t_with_delta_for_v = t_with_delta_for_v[mask_v]
+    interp_d_for_v = interpolate.interp1d(t, d)(t_with_delta_for_v)
+    v = (interp_d_for_v - d[mask_v]) / interval_sec
+
+    t_with_delta_for_a = t_with_delta_for_v + interval_sec * 1000
+    mask_a = t_with_delta_for_a < t_with_delta_for_v.max()
+    t_with_delta_for_a = t_with_delta_for_a[mask_a]
+    interp_v_for_a = interpolate.interp1d(t_with_delta_for_v, v)(t_with_delta_for_a)
+    a = (interp_v_for_a - v[mask_a]) / interval_sec
+
+
+    a *= 1/interval_sec     # mm per sec^2
+    a_t_diff = t_with_delta_for_a[1:]-t_with_delta_for_a[:-1]
+    # med filter 1/d_ker sec, making sure is odd
+    ker_size = int(sec2msec / a_t_diff.mean() // d_ker)
+    a_filter = scipy.signal.medfilt(a, ker_size - (1 - ker_size % 2))
+    a_thresh = 0.01
+    stat_mask_a_based = np.abs(a_filter) < a_thresh
+    ta_stat_delta = t_with_delta_for_a[stat_mask_a_based]
+    ta_map_stat = np.cumsum(1 - (ta_stat_delta[1:] - ta_stat_delta[:-1] < (seq_min_sec_len * sec2msec)))
+    if False:
+        a_stat_delta = a[stat_mask_a_based]
+        plt.figure()
+        plt.scatter(t_with_delta_for_a, a, s=2, label='a')
+        plt.scatter(ta_stat_delta[1:], a_stat_delta[1:], c=ta_map_stat, s=5, label='a_stat', cmap='Dark2', alpha=0.8)
+        plt.legend()
+        plt.show()
+
+    val, idx, cts = np.unique(ta_map_stat, return_index=True, return_counts=True)
+    # [ta_stat_delta[1:][i] for i, c in zip(idx, cts)]
+    # [ta_stat_delta[1:][i+c-1] for i, c in zip(idx, cts)]
+    # [ta_stat_delta[1:][i+c-1]-ta_stat_delta[1:][i] for i, c in zip(idx, cts)]
+
+    start = ta_stat_delta[1:][idx]
+    end = ta_stat_delta[1:][idx + cts - 1]
+    m = (end - start) > (2.5 * sec2msec)
+    # m = ta_stat_delta[idx + cts] - ta_stat_delta[idx] > 2.5 * sec2msec
+    # m = t_with_delta_for_a[idx + cts] - t_with_delta_for_a[idx] > 2.5 * sec2msec
+    # m = t_with_delta_for_a[idx + cts] - t_with_delta_for_a[idx] > 1 * sec2msec
+
+    ret = [(s, e) for s, e in zip(start[m], end[m])]
+
+    if True:
+        plt.figure()
+        plt.scatter(t, d, s=2, label='d')
+        for i, (s, e) in enumerate(ret):
+            plt.scatter(t[(t > s) & (t < e)], d[(t > s) & (t < e)], s=2 , label=f'stat {i}')
+        plt.legend()
+        plt.show()
+
+    return ret
+
+
 def sync_time_phase1(ts1, data1d1, ts2, data1d2, init_diff=1000):
-
-
     # fix imu drift and scale
     def imu_drift_loss(x, t1, t2, d1, d2):
         time_bias, mag_scale, drift_bias, drift_scale = x
@@ -559,10 +608,19 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, init_diff=1000):
     # d1_ = Utils.matrix2mag(traj1)
     # d2_ = scipy.signal.medfilt(Utils.matrix2mag(traj2), 9)
     d1_, d2_ = data1d1, scipy.signal.medfilt(data1d2, 9)
-    t1_, t2_ = ts1-ts1[0] + init_diff, ts2-ts2[0]
+    t1_, t2_ = ts1 - ts1[0] + init_diff, ts2 - ts2[0]
 
+    d2_stat = find_static_phase(t2_, d2_)
+    if len(d2_stat) < 2:
+        print('could not found static phase > 2.5 sec')
+        return None,None,None,None
+    assert len(d2_stat) >= 2, 'could not found static phase > 2.5 sec'
+    t1_mask = (t1_ > d2_stat[0][0]) & (t1_ < d2_stat[1][1])
+    t2_mask = (t2_ > d2_stat[0][0]) & (t2_ < d2_stat[1][1])
 
-    res = minimize(imu_drift_loss, [0, 1, 0, 1], (t1_[:post_process_S*2 + post_process_M], t2_, d1_[:post_process_S*2 + post_process_M], d2_), method='Nelder-Mead')    # good!!! # [3347.734]
+    res = minimize(imu_drift_loss, [0, 1, 0, 1],
+                   (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
+                   method='Nelder-Mead')
 
     time_bias, mag_scale, drift_bias, drift_scale = res.x
     new_t2 = t2_ + time_bias
@@ -574,7 +632,6 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, init_diff=1000):
         # plt.scatter(t1_, new_d1, s=2, label='imu fix')
         # plt.scatter(new_t2, d2_, s=2, label='opti')
         # plt.legend()
-
 
         plt.figure()
         plt.scatter(t1_ + ts1[0] - init_diff, d1_, s=2, label='imu')
@@ -619,42 +676,51 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, interval_sec=10, velocity_mm_pe
         return np.linalg.norm(d1[mask] - interp)
         return Utils.RMSe(d1[mask] - interp)
 
-
-
     d1_, d2_ = data1d1, data1d2
     t1_, t2_ = ts1, ts2
 
-    fps1, fps2 = 30, 240
-    # todo: use ts vec to find pairs (or add nans when missing data instead of frame drop
-    f1 = interval_sec * fps1 // fps1
-    v1_ = (d1_[f1:] - d1_[:-f1]) / (t1_[f1:] - t1_[:-1*f1])
-
-    f2 = interval_sec * fps2 // fps1
-    v2_ = (d2_[f2:] - d2_[:-f2]) / (t2_[f2:] - t2_[:-f2])
+    d2_stat = find_static_phase(t2_, d2_)
+    t1_mask = (t1_ > d2_stat[0][1]) & (t1_ < d2_stat[1][0])
+    t2_mask = (t2_ > d2_stat[0][1]) & (t2_ < d2_stat[1][0])
 
 
-    # todo: use ts vec to find pairs (or add nans when missing data instead of frame drop
-    v_thresh = velocity_mm_per_ms * 0.001
-    start1 = np.argmax(v1_ > v_thresh) + f1
-    start2 = np.argmax(v2_ > v_thresh) + f2
-
-    # end1 = min(len(ts1) - 1, start1 + seq_sec * 30)
-    end1 = min(len(ts1) - 1, start1 + seq_sec * 30, post_process_S + post_process_M)
-    end2 = min(len(ts2) - 1, start2 + seq_sec * 240)
-
-    # # option a: check diff and remove non fit dist
-    # # option b: search the nearest time in vector (maybe)
-    # ts_diff1 = t1_[f1:] - t1_[:-1*f1]
-    # mask1 = ts_diff1 < (fps1 * interval_sec)
-    # mask1 = ts_diff1 < 350
-
+    # fps1, fps2 = 30, 240
+    # # todo: use ts vec to find pairs (or add nans when missing data instead of frame drop
+    # f1 = interval_sec * fps1 // fps1
+    # v1_ = (d1_[f1:] - d1_[:-f1]) / (t1_[f1:] - t1_[:-1 * f1])
+    #
+    # f2 = interval_sec * fps2 // fps1
+    # v2_ = (d2_[f2:] - d2_[:-f2]) / (t2_[f2:] - t2_[:-f2])
+    #
+    # # todo: use ts vec to find pairs (or add nans when missing data instead of frame drop
+    # v_thresh = velocity_mm_per_ms * 0.001
+    # start1 = np.argmax(v1_ > v_thresh) + f1
+    # start2 = np.argmax(v2_ > v_thresh) + f2
+    #
+    # # end1 = min(len(ts1) - 1, start1 + seq_sec * 30)
+    # end1 = min(len(ts1) - 1, start1 + seq_sec * 30, post_process_S + post_process_M)
+    # end2 = min(len(ts2) - 1, start2 + seq_sec * 240)
+    #
+    # # # option a: check diff and remove non fit dist
+    # # # option b: search the nearest time in vector (maybe)
+    # # ts_diff1 = t1_[f1:] - t1_[:-1*f1]
+    # # mask1 = ts_diff1 < (fps1 * interval_sec)
+    # # mask1 = ts_diff1 < 350
 
     if False:
-        res = minimize(time_scale_and_bias_loss, [0, 1], (t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]), method='Nelder-Mead')
+        res = minimize(time_scale_and_bias_loss, [0, 1],
+                       (t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]), method='Nelder-Mead')
         time_bias, time_scale = res.x
         func = time_scale_and_bias_loss
     else:
-        res = minimize(time_bias_loss, [0], (t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]), method='Nelder-Mead')
+        # # res = minimize(time_bias_loss, [0], (t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]),
+        # #                method='Nelder-Mead')
+        # res = minimize(time_bias_loss, [0], (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
+        #                method='Nelder-Mead')
+        res = minimize(time_bias_loss, [0], (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
+                       method='Nelder-Mead', bounds=[(-60, 100)])
+        # res = minimize(time_bias_loss, [200], (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
+        #                method='Nelder-Mead')
         time_bias, = res.x
         time_scale = 1
         func = time_bias_loss
@@ -668,7 +734,8 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, interval_sec=10, velocity_mm_pe
         plt.legend()
         plt.show()
 
-    print('time sync phase 2 res = ', res.x, ', fit error = ', func(res.x, t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]))
+    # print('time sync phase 2 res = ', res.x, ', fit error = ',
+    #       func(res.x, t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]))
     print('time sync phase 2 res = ', res.x, ', all error = ', func(res.x, t1_, t2_, d1_, d2_))
     return t1_, d1_, new_t2, d2_
 
@@ -677,6 +744,8 @@ def time_sync(ts1, traj1, ts2, traj2, init_diff=1000, interval_sec=10, velocity_
     # todo: replace the missing ts with nans in opti data
     t1, d1, t2, d2 = ts1, Utils.matrix2mag(traj1), ts2, Utils.matrix2mag(traj2)
     t1_, d1_, t2_, d2_ = sync_time_phase1(t1, d1, t2, d2, init_diff)
+    if t1_ is None:
+        return None, None, None, None
     t1__, d1__, t2__, d2__ = sync_time_phase2(t1_, d1_, t2_, d2_, interval_sec, velocity_mm_per_ms, seq_sec)
 
     return t2__
@@ -696,17 +765,21 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
 
     imu_rot_rad_euler, imu_time = calc_imu_rotation(data.accel_ts, data.accel, data.gyro_ts, data.gyro)
     imu_idx = 'ag'  # 'a'   # 'g'   #
-    imu_idx = 'g'   # 'ag'  # 'a'   #
+    imu_idx = 'g'  # 'ag'  # 'a'   #
     imu = Trajectory(imu_time[imu_idx], Utils.euler2matrix(imu_rot_rad_euler[imu_idx], degrees=False))
 
     opti_data = OptiReader(osp.join(capture_folder, 'opti_pose_list.csv'))
     opti = Trajectory(opti_data.ts.copy(), opti_data.pose.copy())
 
     new_opti_ts = time_sync(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
+    if new_opti_ts is None:
+        return
 
     ghc = Utils.load_pkl(ghc_path)
     gt_est = Trajectory(new_opti_ts, opti_data.pose.copy()).project(ghc).interpolate(data.ts)
-    gt_est = Trajectory(new_opti_ts + (1000/30), opti_data.pose.copy()).project(ghc).interpolate(data.ts)
+    offset = 0
+    offset = 1000 / 30
+    gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc).interpolate(data.ts)
 
     if doEval:
         print('start eval using', evalDataPath)
@@ -722,10 +795,25 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
 
         if True:
             plt.figure()
+            # plt.scatter(imu.timestamp + offset, Utils.matrix2mag(imu.rel()), s=2, label='imu')
             plt.scatter(cpt.timestamp, Utils.matrix2mag(cpt.rel()), s=2, label='rot color pose')
             plt.scatter(gt_est.timestamp, Utils.matrix2mag(gt_est.rel()), s=2, label='rot est')
             plt.legend()
             plt.show()
+
+        if False:
+            for i in range(0, 100, 10):
+                ggt_est = Trajectory(new_opti_ts + (1000 / 30)+i, opti_data.pose.copy()).project(ghc).interpolate(data.ts)
+                print(i, 'RMSE error (rot)',
+                      Utils.RMSe(Utils.matrix2mag(Utils.inv(cpt.rel()) @ ggt_est.pose)) * 180 / np.pi)
+                print(i, 'RMSE error (trans)', Utils.RMSe(Utils.trans_dist(Utils.inv(cpt.rel()) @ ggt_est.pose)))
+
+                plt.figure()
+                plt.scatter(cpt.timestamp, Utils.matrix2mag(cpt.rel()), s=2, label='rot color pose')
+                plt.scatter(gt_est.timestamp, Utils.matrix2mag(ggt_est.rel()), s=2, label=f'rot est {i}')
+                plt.legend()
+                plt.show()
+
 
         if False:
             plt.figure()
@@ -743,11 +831,10 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
 
 
 def post_process1(capture_folder, ghc_path, doEval=False, evalDataPath=None):
-
     data = DataReader(capture_folder)
     imu_rot_rad_euler, imu_time = calc_imu_rotation(data.accel_ts, data.accel, data.gyro_ts, data.gyro)
-    imu_idx = 'ag'  # 'a'   # 'g'   #
     imu_idx = 'g'  # 'ag'  # 'a'   #
+    imu_idx = 'ag'  # 'a'   # 'g'   #
     imu = Trajectory(imu_time[imu_idx], Utils.euler2matrix(imu_rot_rad_euler[imu_idx], degrees=False))
 
     opti_data = OptiReader(osp.join(capture_folder, 'opti_pose_list.csv'))
@@ -780,8 +867,6 @@ def post_process1(capture_folder, ghc_path, doEval=False, evalDataPath=None):
     opti4.timestamp = opti4.timestamp * time_diff4[1] + time_diff4[0]
     gt_estimation4 = opti4.project(ghc).interpolate(data.ts)
 
-
-
     if doEval:
         im_pose = ImageChessboardPose()
         im_pose.init_from_folder(evalDataPath)
@@ -795,7 +880,7 @@ def post_process1(capture_folder, ghc_path, doEval=False, evalDataPath=None):
         nandist = Utils.trans_dist(Utils.inv(cpt.rel()[4:]) @ gt_estimation.pose)
         dist = nandist[~np.isnan(nandist)]
 
-        rmse = ((dist ** 2).sum() / np.count_nonzero(~np.isnan(dist))) ** 1/2
+        rmse = ((dist ** 2).sum() / np.count_nonzero(~np.isnan(dist))) ** 1 / 2
 
         print('rmse error', rmse)
 
@@ -809,24 +894,22 @@ def post_process1(capture_folder, ghc_path, doEval=False, evalDataPath=None):
         nandist3 = Utils.trans_dist(Utils.inv(cpt.rel()[1:]) @ gt_estimation3.pose)
         dist3 = nandist3[~np.isnan(nandist3)]
 
-        rmse3 = ((dist3 ** 2).sum() / np.count_nonzero(~np.isnan(dist3))) ** 1/2
+        rmse3 = ((dist3 ** 2).sum() / np.count_nonzero(~np.isnan(dist3))) ** 1 / 2
 
         print('rmse error 3', rmse3)
-
 
         nandist4 = Utils.trans_dist(Utils.inv(cpt.rel()[1:]) @ gt_estimation4.pose)
         dist4 = nandist4[~np.isnan(nandist4)]
 
-        rmse4 = ((dist4 ** 2).sum() / np.count_nonzero(~np.isnan(dist4))) ** 1/2
+        rmse4 = ((dist4 ** 2).sum() / np.count_nonzero(~np.isnan(dist4))) ** 1 / 2
 
         print('rmse error 4', rmse4)
 
-        ggg = Trajectory(opti_data.ts * time_diff4[1] + time_diff4[0] + 100, opti_data.pose.copy()).project(ghc).interpolate(
+        ggg = Trajectory(opti_data.ts * time_diff4[1] + time_diff4[0] + 100, opti_data.pose.copy()).project(
+            ghc).interpolate(
             data.ts)
 
         ddd
-
-
 
         x = 11
 
@@ -834,12 +917,7 @@ def post_process1(capture_folder, ghc_path, doEval=False, evalDataPath=None):
 
     # dump gt data to pkl
 
-
-
-
     x = 11
-
-
 
     # read cam data
     #   calc imu rot (relative)
@@ -856,23 +934,33 @@ def post_process1(capture_folder, ghc_path, doEval=False, evalDataPath=None):
 
 if __name__ == '__main__':
     with np.printoptions(suppress=True, precision=3):
-        post_process(r'F:\AMR\record\20211109-154840',
-                     r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
-                     r'D:\AMR\gtool\ClientSample\src\gt_raw')
+        # # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-141653',
+        # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-141343',
+        # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-140817',
+        # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-143359', # -31.849 diff
+        # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-144525',
+        # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-151303',
+        post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-150012',
+                     r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
+                     True, r'D:\mevolve\data\amr\record\gt_raw')
 
-        # post_process(r'C:\Users\ntuser\record\20211109-142305',
+        # post_process(r'F:\AMR\record\20211109-154840',
         #              r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
         #              r'D:\AMR\gtool\ClientSample\src\gt_raw')
         #
-        # # post_process(r'C:\Users\ntuser\record\20211109-141224',
+        # # post_process(r'C:\Users\ntuser\record\20211109-142305',
         # #              r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
         # #              r'D:\AMR\gtool\ClientSample\src\gt_raw')
         # #
-        # # # post_process(
-        # # #     r'D:\mevolve\data\amr\record\omer_time_calib_type_1\20211109-111409',
-        # # #     r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
-        # # #     True, r'D:\mevolve\data\amr\record\gt_raw'
-        # # # )
+        # # # post_process(r'C:\Users\ntuser\record\20211109-141224',
+        # # #              r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
+        # # #              r'D:\AMR\gtool\ClientSample\src\gt_raw')
+        # # #
+        # # # # post_process(
+        # # # #     r'D:\mevolve\data\amr\record\omer_time_calib_type_1\20211109-111409',
+        # # # #     r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
+        # # # #     True, r'D:\mevolve\data\amr\record\gt_raw'
+        # # # # )
 
     # post_process1(
     #     # # # # r'D:\mevolve\data\amr\record\20211108-130024',
