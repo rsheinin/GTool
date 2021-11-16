@@ -203,7 +203,7 @@ def arr2file(arr, path):
 
 
 def save_data(cam_frames, opti_path, opti_share, output_folder, name, pair_index, cam_pose, opti_pose):
-    out_dir = osp.join(output_folder, name, f'pair_{pair_index:03d}')
+    out_dir = osp.join(output_folder, name, f'pair_{pair_index:04d}')
     color_dir = osp.join(out_dir, 'color')
     depth_dir = osp.join(out_dir, 'depth')
     ir_dir = osp.join(out_dir, 'ir')
@@ -231,10 +231,10 @@ def save_metadata(output_folder, cam, dist, c2d, board_h, board_w, board_mm_h, b
     arr2file([board_h, board_w, board_mm_h, board_mm_w], osp.join(output_folder, 'board_params'))
 
 
-def save_pose_list(out_path, bHg, wHc):
-    with open(osp.join(out_path, 'bHg.pkl'), 'wb') as f:
+def save_pose_list(out_path, bHg, wHc, dtype):
+    with open(osp.join(out_path, f'bHg_{dtype}.pkl'), 'wb') as f:
         pickle.dump(bHg, f)
-    with open(osp.join(out_path, 'wHc.pkl'), 'wb') as f:
+    with open(osp.join(out_path, f'wHc_{dtype}.pkl'), 'wb') as f:
         pickle.dump(wHc, f)
 
 
@@ -508,16 +508,13 @@ def estimate_hand_eye(bHg, wHc, initial_ghc=np.eye(4)):
         print('res euler', R.from_matrix(he_R).as_euler('xyz', degrees=True))
         print('res translation', he_T.flatten())
 
-
         diff = cam_est @ inv(gt_est)
         trans_err = np.linalg.norm(diff[:, :3, 3], axis=1).mean()
         print('trans error:', trans_err)
         # plot_3d(gt_est, cam_est)
         plot_3d(gt_est, cam_est, gt_rel)
 
-
-
-        return ghc
+        return ghc, to_6dof(ghc)
 
         # print('initial', R.from_matrix(initial_ghc[..., :3, :3]).as_euler('xyz', degrees=True))
         # print('initial', initial_ghc[..., :3, 3].flatten())
@@ -541,7 +538,21 @@ def estimate_hand_eye(bHg, wHc, initial_ghc=np.eye(4)):
         #     trans_err = np.linalg.norm(diff[:, :3, 3], axis=1).mean()
         #     print(f'{i}', trans_err)
 
-    return None
+    return initial_ghc, to_6dof(initial_ghc)
+
+
+def estimate_hand_eye_nm_opt(bHg, wHc, initial_ghc=np.eye(4)):
+    x0 = np.concatenate([matrix2euler(initial_ghc), initial_ghc[..., :3, 3]])
+    res = minimize(ghc_trans_error, x0, (wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg), method='Nelder-Mead')
+    # with np.printoptions(suppress=True, precision=3):
+    #     print('alg0 res', res0.x)
+    #     print('alg0 err', ghc_trans_error(res0.x, wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg))
+
+    return homogeneous(euler2matrix(res.x[:3]), res.x[3:]), res.x
+
+
+def to_6dof(x):
+    return np.concatenate([matrix2euler(x).flatten(), x[..., :3, 3].flatten()])
 
 
 def ghc_trans_error(x, rel_cam, rel_opti):
@@ -567,6 +578,17 @@ def validate_pair(cam_pose, cam_list, opti_pose, opti_list):
             return False
 
     return True
+
+
+def calc(initial_ghc, bHg, wHc):
+    for n in initial_ghc:
+        res_mat, res = initial_ghc[n]['func'](bHg, wHc, initial_ghc[n]['mat'])
+        with np.printoptions(suppress=True, precision=3):
+            print(f'{n} [rx, ry, rz, tx, ty, tz]:', res)
+            print(f'{n} error on fit data:', ghc_trans_error(res, wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg))
+        initial_ghc[n]['mat'] = res_mat
+
+    return initial_ghc
 
 ############ opti #############
 def opti_create_instance(server, ot_server, ot_client):
@@ -630,6 +652,10 @@ arg_ot_server = '127.0.0.1'
 arg_ot_client = '127.0.0.1'
 arg_rigid_body = 'AMR_101'
 
+arg_n_fit_pairs = 5
+arg_n_fit_pairs = 40
+arg_n_test_pairs = 15
+
 # arg_shared_folder = r'F:\GTService\output\OptitrackResults\PosesFiles'
 arg_shared_folder = r'\\optitrack-perc.ger.corp.intel.com\GTService\output\OptitrackResults\PosesFiles'
 
@@ -643,16 +669,26 @@ def calibration_main():
     frames_collected = []
     board_points3d = make_points3d(arg_board_h, arg_board_w, arg_board_mm_h, arg_board_mm_w)
 
-    initial_ghc = homogeneous(R.from_euler('xyz', [-114.1, 12.01, -90.1], degrees=True).as_matrix(), [-21, 6, -55])
-    initial_ghc = homogeneous(R.from_euler('xyz', [-64.02023568, 8.89981757, 54.60926826], degrees=True).as_matrix(), [0, 0, 0])
-    initial_ghc = homogeneous(R.from_euler('xyz', [-63.272, -5.567, 87.657], degrees=True).as_matrix(), [-86.303, 52.676, -51.188])
+    # initial_ghc = homogeneous(R.from_euler('xyz', [-114.1, 12.01, -90.1], degrees=True).as_matrix(), [-21, 6, -55])
+    # initial_ghc = homogeneous(R.from_euler('xyz', [-64.02023568, 8.89981757, 54.60926826], degrees=True).as_matrix(), [0, 0, 0])
+    # initial_ghc = homogeneous(R.from_euler('xyz', [-63.272, -5.567, 87.657], degrees=True).as_matrix(), [-86.303, 52.676, -51.188])
+    #
+    # initial_ghc0 = np.eye(4)
+    # initial_ghc1 = homogeneous(R.from_euler('xyz', [-63.272, -5.567, 87.657], degrees=True).as_matrix(), [-86.303, 52.676, -51.188])
 
-    initial_ghc0 = np.eye(4)
-    initial_ghc1 = homogeneous(R.from_euler('xyz', [-63.272, -5.567, 87.657], degrees=True).as_matrix(), [-86.303, 52.676, -51.188])
+    initial_ghc = {
+        'tsai': {'mat': np.eye(4), 'func': estimate_hand_eye},
+        'nelder-mead-from-scratch': {'mat': np.eye(4), 'func': estimate_hand_eye_nm_opt},
+        'nelder-mead-from-guess': {'mat': homogeneous(R.from_euler('xyz', [-63.272, -5.567, 87.657], degrees=True).as_matrix(), [-86.303, 52.676, -51.188]), 'func': estimate_hand_eye_nm_opt}
+    }
+
+    main_alg = 'tsai'
 
     bHg = []
     wHc = []
 
+    bHg_test = []
+    wHc_test = []
 
 
     # Configure depth and color streams
@@ -701,14 +737,16 @@ def calibration_main():
         arg_board_mm_h, arg_board_mm_w
     )
 
-    # device = profile.get_device()
-    # depth_sensor = device.query_sensors()[0]
-    # emitter = depth_sensor.get_option(rs.option.emitter_enabled)
-    # print("emitter = ", emitter)
-    # set_emitter = 0
-    # depth_sensor.set_option(rs.option.emitter_enabled, set_emitter)
-    # emitter1 = depth_sensor.get_option(rs.option.emitter_enabled)
-    # print("new emitter = ", emitter1)
+    if True:
+        device = profile.get_device()
+        depth_sensor = device.query_sensors()[0]
+        emitter = depth_sensor.get_option(rs.option.emitter_enabled)
+        print("emitter = ", emitter)
+        set_emitter = 0
+        depth_sensor.set_option(rs.option.emitter_enabled, set_emitter)
+        emitter1 = depth_sensor.get_option(rs.option.emitter_enabled)
+        print("new emitter = ", emitter1)
+
     all_pair_count = 0
 
     try:
@@ -742,15 +780,18 @@ def calibration_main():
                 color_image = color_image.copy()
                 cam_pose, reproj_error, corners = image2pose(color_image, color_cam_mat, color_cam_dist, arg_board_h, arg_board_w, board_points3d)
                 bright_rect = color_image[20:100, 5:250]
-                bright_rect[...] = (bright_rect * alpha + beta * np.asarray([255, 255, 255])).astype('uint8')
+                fac = 200 if len(bHg) < arg_n_fit_pairs else 255
+                bright_rect[...] = (bright_rect * alpha + beta * np.asarray([255, fac, fac])).astype('uint8')
 
                 if cam_pose is not None:
-                    color_image = cv2.putText(color_image, f're-projection score: {reproj_error :.3f}', (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255))
+                    color_image = cv2.putText(color_image, f're-projection score: {reproj_error :.3f}', (10, 50), cv2.FONT_HERSHEY_TRIPLEX, 0.5, (0, 0, 255))
 
-                color_image = cv2.putText(color_image, f'{len(bHg)} good pairs', (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255))
+                if len(bHg) < arg_n_fit_pairs:
+                    color_image = cv2.putText(color_image, f'{len(bHg)} good pairs / {arg_n_fit_pairs}', (10, 70), cv2.FONT_HERSHEY_TRIPLEX, 0.5, (0, 0, 255))
+                else:
+                    color_image = cv2.putText(color_image, f'{len(bHg_test)} test pairs / {arg_n_test_pairs}', (10, 70), cv2.FONT_HERSHEY_TRIPLEX, 0.5, (0, 100, 255))
 
                 in_range = opti_in_range(opti)
-
                 if (
                         cam_pose is None
                         # or reproj_error > thresh
@@ -761,8 +802,6 @@ def calibration_main():
                     able_to_collect = False
                 else:
                     able_to_collect = True
-
-
 
             # If depth and color resolutions are different, resize color image to match depth image for display
             if depth_colormap_dim != color_colormap_dim:
@@ -788,14 +827,28 @@ def calibration_main():
                         frames_collected, opti_out_rel,
                         arg_shared_folder, arg_output_folder, arg_test_case,
                         # len(wHc), cam_pose, opti_pose
-                        all_pair_count, cam_pose, opti_pose
+                        all_pair_count + (0 if len(bHg) < arg_n_fit_pairs else 1000), cam_pose, opti_pose
                     )
 
                     all_pair_count += 1
 
                     if cam_pose is not None and opti_pose is not None and validate_pair(cam_pose, wHc, opti_pose, bHg):
-                        bHg += [opti_pose]
-                        wHc += [cam_pose]
+                        if len(bHg) < arg_n_fit_pairs:
+                            bHg += [opti_pose]
+                            wHc += [cam_pose]
+                            if len(bHg) == arg_n_fit_pairs:
+                                initial_ghc = calc(initial_ghc, bHg, wHc)
+                        else:
+                            bHg_test += [opti_pose]
+                            wHc_test += [cam_pose]
+
+                            for n in initial_ghc:
+                                with np.printoptions(suppress=True, precision=3):
+                                    res = to_6dof(initial_ghc[n]['mat'])
+                                    # print(f'{n} [rx, ry, rz, tx, ty, tz]:', res)
+                                    print(f'{n} test error:', ghc_trans_error(res, wHc_test[0] @ inv(wHc_test), inv(bHg_test[0]) @ bHg_test))
+
+                            # todo: estimate ghc
 
                         # initial_ghc = estimate_hand_eye(bHg, wHc, initial_ghc)
                         # estimate_hand_eye(bHg, wHc, initial_ghc)
@@ -813,7 +866,7 @@ def calibration_main():
                     images = cv2.cvtColor(images, cv2.COLOR_BGR2GRAY)
                     images = np.stack([images] * 3, axis=-1)
 
-                    images = cv2.putText(images, f'collecting data, please don\'t move ({remain_collect})', (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 255)
+                    images = cv2.putText(images, f'collecting data, please don\'t move ({remain_collect})', (10, 50), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
 
                     frames_collected += [(color_image.copy(), depth_image.copy(), infrared_image.copy())]
 
@@ -824,7 +877,7 @@ def calibration_main():
                 # cam_est = chw[0] @ whc[0] @ chw
                 # gt_est = chw[0] @ chg @ ghb[0] @ bhg @ ghc
                 cam_est = inv(wHc[-1])
-                gt_est = inv(wHc[0]) @  inv(initial_ghc) @ inv(bHg[0]) @ bHg[-1] @ initial_ghc
+                gt_est = inv(wHc[0]) @  inv(initial_ghc[main_alg]['mat']) @ inv(bHg[0]) @ bHg[-1] @ initial_ghc[main_alg]['mat']
 
                 # images = draw_points3d(images, inv(cam_est), board_points3d, color_cam_mat, color_cam_dist, [0, 255, 0])
                 images = draw_points3d(images, inv(gt_est), board_points3d, color_cam_mat, color_cam_dist, [255, 0, 255])
@@ -836,7 +889,8 @@ def calibration_main():
             tfactor = 10    # 1.0
             if key == ord('t'):
                 # estimate_hand_eye(bHg, wHc, initial_ghc)
-                save_pose_list(osp.join(arg_output_folder, arg_test_case), bHg, wHc)
+                save_pose_list(osp.join(arg_output_folder, arg_test_case), bHg, wHc, 'calc')
+                save_pose_list(osp.join(arg_output_folder, arg_test_case), bHg_test, wHc_test, 'test')
             if record_mode == RecordMode.VIEW:
                 # Press esc or 'q' to close the image window
                 if key == ord('s') and able_to_collect:
@@ -867,35 +921,57 @@ def calibration_main():
                 #     print(initial_ghc[:3, 3])
 
                 elif key == ord('c'):
-                    # estimate_hand_eye(bHg, wHc, initial_ghc)
-                    res = estimate_hand_eye(bHg, wHc, initial_ghc)
-                    if res is not None:
-                        initial_ghc = res
 
-                    x00 = np.concatenate([matrix2euler(initial_ghc0), initial_ghc0[..., :3, 3]])
-                    res0 = minimize(ghc_trans_error, x00, (wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg), method='Nelder-Mead')
-                    with np.printoptions(suppress=True, precision=3):
-                        print('alg0 res', res0.x)
-                        print('alg0 err', ghc_trans_error(res0.x, wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg))
-                    initial_ghc0 = homogeneous(euler2matrix(res0.x[:3]), res0.x[3:])
+                    initial_ghc = calc(initial_ghc, bHg, wHc)
+
+                    # for n in initial_ghc:
+                    #     res_mat, res = initial_ghc[n]['func'](bHg, wHc, initial_ghc[n]['mat'])
+                    #     with np.printoptions(suppress=True, precision=3):
+                    #         print(f'{n} [rx, ry, rz, tx, ty, tz]:', res)
+                    #         print(f'{n} error:', ghc_trans_error(res, wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg))
+                    #     initial_ghc[n]['mat'] = res_mat
 
 
-                    x01 = np.concatenate([matrix2euler(initial_ghc1), initial_ghc1[..., :3, 3]])
-                    res1 = minimize(ghc_trans_error, x01, (wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg), method='Nelder-Mead')
-                    with np.printoptions(suppress=True, precision=3):
-                        print('alg1 res', res1.x)
-                        print('alg1 err', ghc_trans_error(res1.x, wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg))
-                    initial_ghc1 = homogeneous(euler2matrix(res1.x[:3]), res1.x[3:])
+                    # # estimate_hand_eye(bHg, wHc, initial_ghc)
+                    # res = estimate_hand_eye(bHg, wHc, initial_ghc[main_alg])
+                    # if res is not None:
+                    #     initial_ghc[main_alg] = res
+                    #
+                    # x00 = np.concatenate([matrix2euler(initial_ghc0), initial_ghc0[..., :3, 3]])
+                    # res0 = minimize(ghc_trans_error, x00, (wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg), method='Nelder-Mead')
+                    # with np.printoptions(suppress=True, precision=3):
+                    #     print('alg0 res', res0.x)
+                    #     print('alg0 err', ghc_trans_error(res0.x, wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg))
+                    # initial_ghc0 = homogeneous(euler2matrix(res0.x[:3]), res0.x[3:])
+                    #
+                    #
+                    # x01 = np.concatenate([matrix2euler(initial_ghc1), initial_ghc1[..., :3, 3]])
+                    # res1 = minimize(ghc_trans_error, x01, (wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg), method='Nelder-Mead')
+                    # with np.printoptions(suppress=True, precision=3):
+                    #     print('alg1 res', res1.x)
+                    #     print('alg1 err', ghc_trans_error(res1.x, wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg))
+                    # initial_ghc1 = homogeneous(euler2matrix(res1.x[:3]), res1.x[3:])
 
 
                 elif (key & 0xFF == ord('q') or key == 27):
-                    res = estimate_hand_eye(bHg, wHc, initial_ghc)
-                    if res is not None:
-                        initial_ghc = res
-                    with open(osp.join(arg_output_folder, arg_test_case, 'gHc.pkl'), 'wb') as f:
-                        pickle.dump(initial_ghc, f)
+                    initial_ghc = calc(initial_ghc, bHg, wHc)
+                    for n in initial_ghc:
+                        # res_mat, res = initial_ghc[n]['func'](bHg, wHc, initial_ghc[n]['mat'])
+                        # with np.printoptions(suppress=True, precision=3):
+                        #     print(f'{n} [rx, ry, rz, tx, ty, tz]:', res)
+                        #     print(f'{n} error:', ghc_trans_error(res, wHc[0] @ inv(wHc), inv(bHg[0]) @ bHg))
+                        # initial_ghc[n]['mat'] = res_mat
 
-                    save_pose_list(osp.join(arg_output_folder, arg_test_case), bHg, wHc)
+                        if len(bHg_test) > 0:
+                            res = to_6dof(initial_ghc[n]['mat'])
+                            print(f'{n} test error:',
+                                  ghc_trans_error(res, wHc_test[0] @ inv(wHc_test), inv(bHg_test[0]) @ bHg_test))
+
+                        with open(osp.join(arg_output_folder, arg_test_case, f'gHc_{n}.pkl'), 'wb') as f:
+                            pickle.dump(initial_ghc[n]['mat'], f)
+
+                    save_pose_list(osp.join(arg_output_folder, arg_test_case), bHg, wHc, 'calc')
+                    save_pose_list(osp.join(arg_output_folder, arg_test_case), bHg_test, wHc_test, 'test')
 
                     # todo: save bhg
                     # todo: save chg
