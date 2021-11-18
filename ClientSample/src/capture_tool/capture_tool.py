@@ -14,10 +14,11 @@ import cv2
 
 import threading
 
-import shutil
-from ServiceClient.OptiClient import OptiClient
 
-from capture_post_process import post_process, post_process_S, post_process_M
+
+from common.capture_post_process import post_process, post_process_S, post_process_M
+from common.Utils import OptitrackClient
+
 print(post_process_S, post_process_M)
 
 def xyz2dict(data):
@@ -232,43 +233,6 @@ class WorkerZICC(threading.Thread):
             self.last_data = data
 
 
-class OptitrackClient:
-    def __init__(self,
-                 server='localhost',
-                 ot_server='127.0.0.1',
-                 ot_client='127.0.0.1',
-                 rigid_body='AMR_101',
-                 shared_folder=r'F:\GTService\output\OptitrackResults\PosesFiles'):
-        self.server = server
-        self.ot_server = ot_server
-        self.ot_client = ot_client
-        self.rigid_body = rigid_body
-        self.shared_folder = shared_folder
-
-        self.opti = self.create_instance(server, ot_server, ot_client)
-        self.rel_path = None
-
-    @staticmethod
-    def create_instance(server, ot_server, ot_client):
-        return OptiClient(server, ot_server, ot_client)
-
-    def rb_init(self):
-        self.rel_path = os.path.join(self.opti.request_init(self.rigid_body), 'Optitrack', f'{self.rigid_body}.csv')
-
-    def in_range(self):
-        return self.opti.request_is_in_range().read() == b'true'
-
-    def start(self):
-        self.opti.request_start()
-
-    def stop(self):
-        self.opti.request_stop()
-        self.opti.request_shutdown()
-
-    def copy_csv(self, dst_dir):
-        shutil.copy(os.path.join(self.shared_folder, self.rel_path),
-                    os.path.join(dst_dir, 'opti_pose_list.csv'))
-
 
 # # class RecordPhase(Flag):
 # class RecordPhase(Enum):
@@ -278,16 +242,20 @@ class OptitrackClient:
 #     PHASE_STAT_II = 3
 #     PHASE_RECORD_MOVE = 4
 
-__VERSION__ = '1.0.6'
+__VERSION__ = '1.0.6.1'
 if __name__ == '__main__':
     print(f"Capture tool version {__VERSION__}")
     parser = argparse.ArgumentParser()
-    default_output_folder = os.path.join(os.path.expanduser("~"), "record")
     default_output_folder = os.path.join(r'F:\AMR', "record")
+    default_output_folder = os.path.join(os.path.expanduser("~"), "record")
     parser.add_argument("-o-", "--output_folder", type=str, default=default_output_folder, required=False)
     parser.add_argument("--opti", default=False, action='store_true')
+    parser.add_argument("--ghc_path", type=str, default=r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish\gHc_nelder-mead-from-guess.pkl', required=False)
+    parser.add_argument("--gt_raw", type=str, default=r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish', required=False)
     args = parser.parse_args()
 
+    ghc_path = args.ghc_path
+    gt_raw = args.gt_raw
     base_output_folder = args.output_folder
     output_folder = None
     DISP_MAX_DIST = 3
@@ -406,7 +374,7 @@ if __name__ == '__main__':
 
         else:
             for i, txt in enumerate(['Please place the',
-                                     'device in a stable',
+                                     'device on a stable',
                                      'position and then',
                                      'press space to',
                                      'start capturing']):
@@ -442,10 +410,9 @@ if __name__ == '__main__':
 
                     with np.printoptions(suppress=True, precision=3):
                         post_process(output_folder,
-                                     r'F:\AMR\calib-dc\calib-20211114-134246\gHc_nelder-mead-from-scratch.pkl',
-                                     # r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl',
+                                     ghc_path,
                                      True,
-                                     r'D:\AMR\gtool\ClientSample\src\gt_raw')
+                                     gt_raw)
 
         elif k == 27:
             break

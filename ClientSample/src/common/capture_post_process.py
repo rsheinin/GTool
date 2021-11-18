@@ -13,165 +13,23 @@ import re
 import pickle
 import itertools
 
-from glob import glob
-from datetime import datetime
 from collections import defaultdict, OrderedDict
 
-
-class Utils:
-    @staticmethod
-    def load_pkl(path):
-        with open(path, 'rb') as f:
-            data = pickle.load(f)
-
-        return data
-
-    @staticmethod
-    def save_pkl(path, data):
-        with open(path, 'wb') as f:
-            pickle.dump(data, f)
-
-    @staticmethod
-    def homogeneous(r, t=[0, 0, 0]):
-        # return Utils.homogeneous_nd(np.asarray(r), np.asarray(t))[0]
-        return np.concatenate([np.concatenate([np.asarray(r), np.asarray(t)[..., None]], axis=-1),
-                               np.asarray([0, 0, 0, 1])[None, ...]])
-
-    @staticmethod
-    def homogeneous_nd(r_, t_, n_=None):
-        n = n_ or len(r_)
-        r = np.asarray(r_)
-        t = np.asarray(t_)[..., None]
-        return np.concatenate([np.concatenate([r, t], axis=2), np.array([[0, 0, 0, 1]] * n)[:, None, :]], axis=1)
-
-    @staticmethod
-    def inv(m):
-        return np.linalg.inv(m)
-
-    @staticmethod
-    def euler2matrix(eu, order='xyz', degrees=True):
-        return R.from_euler(order, eu, degrees=degrees).as_matrix()
-
-    @staticmethod
-    def matrix2euler(m, order='xyz', degrees=True):
-        return R.from_matrix(m[..., :3, :3]).as_euler(order, degrees=degrees)
-
-    @staticmethod
-    def matrix2mag(m):
-        return np.linalg.norm(R.from_matrix(m[..., :3, :3]).as_rotvec(), axis=1)
-
-    @staticmethod
-    def trans_dist(m):
-        return np.linalg.norm(m[..., :3, 3], axis=1)
-
-    @staticmethod
-    def RMSe(dist):
-        d = dist[~np.isnan(dist)]
-        n = len(d)
-        return np.sqrt(np.sum((d ** 2) / n))
-        return (((d ** 2) / len(d)).sum()) ** (1 / 2)
-
-    @staticmethod
-    def average_transformation(pose_list):
-        p_ = np.asarray(pose_list)
-        rot = R.from_matrix(p_[..., :3, :3]).mean().as_matrix()
-        trans = np.mean(p_[..., :3, 3], axis=0)
-        return Utils.homogeneous(rot, trans)
+from common.Utils import Utils, ImageChessboardPose
 
 
-
-
-class ImageChessboardPose:
-
-    def init_from_folder(self, path):
-        self.board_h, self.board_w, self.board_mm_h, self.board_mm_w = \
-            Utils.load_pkl(osp.join(path, 'board_params.pkl'))
-        # self.board_h, self.board_w, self.board_mm_h, self.board_mm_w = \
-        #     pd.read_csv(osp.join(path, 'board_params.csv'), header=None).values.flatten()
-        self.board_points3d = self.make_points3d(self.board_h, self.board_w, self.board_mm_h, self.board_mm_w)
-
-        self.color_cam_mat = Utils.load_pkl(osp.join(path, 'cam.pkl'))
-        self.color_cam_dist = Utils.load_pkl(osp.join(path, 'dist.pkl'))
-
-    def get_pose(self, image):
-        pose = self.image2pose(image, self.color_cam_mat, self.color_cam_dist,
-                               self.board_h, self.board_w, self.board_points3d, draw_coord=True)
-        cv2.imshow('im pose', image)
-        cv2.waitKey(1)
-        return pose
-        return self.image2pose(image, self.color_cam_mat, self.color_cam_dist,
-                               self.board_h, self.board_w, self.board_points3d, draw_coord=True)
-
-    @staticmethod
-    def reprojection_error(imgpoints, objpoints, rvecs, tvecs, mtx, dist):
-        imgpoints2, _ = cv2.projectPoints(objpoints, rvecs, tvecs, mtx, dist)
-        error = cv2.norm(imgpoints, imgpoints2, cv2.NORM_L2) / len(imgpoints2)
-
-        return error
-
-    @staticmethod
-    def make_points3d(board_h, board_w, sq_h, sq_w):
-        objp = np.zeros((board_w * board_h, 3), np.float32)
-        objp[:, :2] = np.mgrid[0:board_w, 0:board_h].T.reshape(-1, 2)
-        objp[:, 0] *= sq_w
-        objp[:, 1] *= sq_h
-
-        return objp
-
-    @staticmethod
-    def draw_axis(img, corners, imgpts):
-        corner = tuple(np.round(corners[0].ravel()).astype('int'))
-        img = cv2.line(img, corner, tuple(imgpts[0].ravel().astype('int')), (255, 0, 0), 2)
-        img = cv2.line(img, corner, tuple(imgpts[1].ravel().astype('int')), (0, 255, 0), 2)
-        img = cv2.line(img, corner, tuple(imgpts[2].ravel().astype('int')), (0, 0, 255), 2)
-        return img
-
-    @staticmethod
-    def image2pose(im, mtx, dist, board_h, board_w, points3d, draw_corners=False, draw_coord=False, coord_scale=50):
-
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-
-        gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-
-        # Find the chessboard corners
-        ret, corners = cv2.findChessboardCorners(gray, (board_w, board_h), None)
-
-        # If found, add object points, image points
-        if ret == True:
-
-            # Draw and display the corners
-            if draw_corners:
-                im = cv2.drawChessboardCorners(im, (board_w, board_h), corners, ret)
-
-            points2d = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-
-            # Find the rotation and translation vectors.
-            # _, rvecs, tvecs, inliers = cv2.solvePnPRansac(points3d, points2d, mtx, dist)
-            _, rvecs, tvecs = cv2.solvePnP(points3d, points2d, mtx, dist)
-            reproj_error = ImageChessboardPose.reprojection_error(points2d, points3d, rvecs, tvecs, mtx, dist)
-
-            if draw_coord:
-                # project 3D points to image plane
-                axis = np.float32([[coord_scale, 0, 0], [0, coord_scale, 0], [0, 0, -coord_scale]]).reshape(-1, 3)
-                axis_imgpts, jac = cv2.projectPoints(axis, rvecs, tvecs, mtx, dist)
-
-                im = ImageChessboardPose.draw_axis(im, corners, axis_imgpts)
-
-            pose = np.eye(4)
-            pose[:3, :3] = cv2.Rodrigues(rvecs)[0]
-            pose[:3, 3] = tvecs.flatten()
-
-            return pose, reproj_error, corners
-
-        return None, None, None
+post_process_S, post_process_M = 300, 600
+p1_sec, p2_sec, p3_sec = 3.5, 7.5, 5
 
 
 class DataReader:
     def __init__(self, capture_folder, keys=['ts', 'color', 'accel', 'accel_ts', 'gyro', 'gyro_ts']):
 
         self.folder = capture_folder
-        for k, v in self.iterate_frames_(capture_folder, keys).items():
+        data, pkl_path = self.iterate_frames_(capture_folder, keys)
+        for k, v in data.items():
             setattr(self, k, v)
+        self.pkls = pkl_path
 
     @staticmethod
     def iterate_frames_(folder, keys):
@@ -185,8 +43,8 @@ class DataReader:
             for key, val in zip(*DataReader.read_frame_(pkl, keys)):
                 data[key] += [val]
 
-        return {k: np.asarray(v) for k, v in data.items()}
-        # todo: convertto np?
+        return {k: np.asarray(v) for k, v in data.items()}, pkls
+        # todo: convert to np?
         return data
 
     @staticmethod
@@ -317,234 +175,6 @@ def calc_imu_rotation(accel_ts, accel, gyro_ts, gyro):
     return imu_euler_rad_rot, imu_rot_time
 
 
-def temporal_diff(ts1, traj1, ts2, traj2):
-    def func_ta(x, t1, t2, d1, d2):
-        slerp = Slerp(t2, R.from_matrix(d2[:, :3, :3]))
-        new_ts = np.asarray(t1) + x
-        mask = (new_ts > t2[0]) & (new_ts < t2[-1])
-        interp = slerp(new_ts[mask]).as_matrix()
-
-        return np.linalg.norm(Utils.matrix2mag(d1[mask]) - Utils.matrix2mag(interp))
-
-        a = Utils.matrix2mag(d1[mask])
-        b = Utils.matrix2mag(interp)
-
-        s, e = 200, 400
-        a = a[s:e]
-        b = b[s:e]
-
-        return np.linalg.norm((a - a.max()) - (b - b.max()))
-        return Utils.RMSe((a - a.max()) - (b - b.max()))
-        return Utils.RMSe(Utils.matrix2mag(d1[mask]) - Utils.matrix2mag(interp))
-
-    res = minimize(func_ta, 0, (ts1 - ts1[0], ts2 - ts2[0], traj1, traj2), method='Nelder-Mead')  # good!!! # [3347.734]
-
-    # # ts1[i] - ts1[0] + res.x = ts2[i] - t2[0]
-    # ts1[i] = ts2[i] + (ts1[0] - ts2[0] - res.x)
-
-    return ts1[0] - ts2[0] - res.x  # time to add to t2 clock
-
-
-def temporal_diff2(ts1, traj1, ts2, traj2):
-    def func_ta(x, t1, t2, d1, d2):
-        bias, scale = x
-        new_ts = t2 * scale + bias
-        slerp = Slerp(new_ts, R.from_matrix(d2[:, :3, :3]))
-        mask = (t1 > new_ts[0]) & (t1 < new_ts[-1])
-        interp = slerp(t1[mask]).as_matrix()
-
-        return np.linalg.norm(Utils.matrix2mag(d1[mask]) - Utils.matrix2mag(interp))
-
-        return np.linalg.norm((a - a.max()) - (b - b.max()))
-        return Utils.RMSe((a - a.max()) - (b - b.max()))
-        return Utils.RMSe(Utils.matrix2mag(d1[mask]) - Utils.matrix2mag(interp))
-
-    res = minimize(func_ta, [0, 1], (ts1 - ts1[0], ts2 - ts2[0], traj1, traj2),
-                   method='Nelder-Mead')  # good!!! # [3347.734]
-
-    # # # # ts1 - ts1[0] = (ts2 - ts2[0]) * scale + bias
-    # # # ts1[i] - ts1[0] = ts2[i]*scale - ts2[0]*scale + bias
-    # # ts1[i] = ts2[i]*scale - ts2[0]*scale + bias + ts1[0]
-    # ts1[i] = ts2[i]*scale + bias + ts1[0] - ts2[0]*scale
-
-    bias, scale = res.x
-    return bias + ts1[0] - ts2[0] * scale, scale
-
-
-def temporal_diff3(ts1, traj1, ts2, traj2):
-    def func_ta(x, t1, t2, d1, d2):
-        bias, scale = x
-        slerp = Slerp(t2, R.from_matrix(d2[:, :3, :3]))
-        new_ts = np.asarray(t1) + bias
-        mask = (new_ts > t2[0]) & (new_ts < t2[-1])
-        interp = slerp(new_ts[mask]).as_matrix()
-
-        return np.linalg.norm(Utils.matrix2mag(d1[mask]) * scale - Utils.matrix2mag(interp))
-
-    res = minimize(func_ta, [0, 1], (ts1 - ts1[0], ts2 - ts2[0], traj1, traj2),
-                   method='Nelder-Mead')  # good!!! # [3347.734]
-
-    # # ts1[i] - ts1[0] + res.x = ts2[i] - t2[0]
-    # ts1[i] = ts2[i] + (ts1[0] - ts2[0] - res.x)
-
-    print(res.x)
-    bias, scale = res.x
-    return ts1[0] - ts2[0] - bias  # time to add to t2 clock
-
-
-def temporal_diff4(ts1, traj1, ts2, traj2):
-    # fix imu drift and scale
-    def func_ta1(x, t1, t2, d1, d2):
-        time_bias, mag_scale, drift_bias, drift_scale = x
-
-        new_t2 = t2 + time_bias
-        mask = (t1 > new_t2[0]) & (t1 < new_t2[-1])
-        interp = interpolate.interp1d(new_t2, d2)(t1[mask])
-        new_d1 = d1 * mag_scale + (t1 - t1[0]) * drift_scale + drift_bias
-
-        return np.linalg.norm(new_d1[mask] - interp)
-        return Utils.RMSe(new_d1[mask] - interp)
-
-    # time bias and scale
-    def func_ta2(x, t1, t2, d1, d2):
-        time_bias, time_scale = x
-
-        new_t2 = t2 * time_scale + time_bias
-        mask = (t1 > new_t2[0]) & (t1 < new_t2[-1])
-        interp = interpolate.interp1d(new_t2, d2)(t1[mask])
-
-        return np.linalg.norm(d1[mask] - interp)
-        return Utils.RMSe(d1[mask] - interp)
-
-    d1_ = Utils.matrix2mag(traj1)
-    d2_ = scipy.signal.medfilt(Utils.matrix2mag(traj2), 9)
-    # res = minimize(func_ta1, [0, 1, 0, 1], (ts1-ts1[0], ts2-ts2[0], d1_, d2_), method='Nelder-Mead')    # good!!! # [3347.734]
-    # # res = minimize(func_ta1, [0, 1, 0, 1], (ts1-ts1[0] + 500, ts2-ts2[0], d1_, d2_), method='Nelder-Mead')    # good!!! # [3347.734]
-    # # # res = minimize(func_ta1, [0, 1, 0, 1], (ts1[:15*30]-ts1[0] + 1000, ts2-ts2[0], d1_[:15*30], d2_), method='Nelder-Mead')    # good!!! # [3347.734]
-    res = minimize(func_ta1, [0, 1, 0, 1], (1000 + ts1 - ts1[0], ts2 - ts2[0], d1_, d2_),
-                   method='Nelder-Mead')  # good!!! # [3347.734]
-
-    t1, t2 = ts1 - ts1[0], ts2 - ts2[0]
-    t1, t2 = ts1 - ts1[0] + 1000, ts2 - ts2[0]
-    time_bias, mag_scale, drift_bias, drift_scale = res.x
-    new_t2 = t2 + time_bias
-    new_d1 = d1_ * mag_scale + (ts1 - ts1[0]) * drift_scale + drift_bias
-
-    if False:
-        plt.figure()
-        plt.scatter(t1, d1_, s=2, label='imu')
-        plt.scatter(t1, new_d1, s=2, label='imu fix')
-        plt.scatter(new_t2, d2_, s=2, label='opti')
-        plt.legend()
-
-    s = 10
-
-    f1 = s * 1
-    v1_ = (d1_[f1:] - d1_[:-f1]) / (ts1[f1:] - ts1[:-1 * f1])
-
-    f2 = s * 8
-    v2_ = (d2_[f2:] - d2_[:-f2]) / (ts2[f2:] - ts2[:-f2])
-
-    v_thresh = 0.014 * 0.001
-    start1 = np.argmax(v1_ > v_thresh) + f1
-    start2 = np.argmax(v2_ > v_thresh) + f2
-
-    sec = 15
-    end1 = min(len(ts1) - 1, start1 + sec * 30)
-    end2 = min(len(ts2) - 1, start2 + sec * 240)
-
-    # res = minimize(func_ta2, [time_bias, 1], (ts1[start1:end1]-ts1[0], ts2[start2:end2]-ts2[0], new_d1[start1:end1], d2_[start2:end2]), method='Nelder-Mead')
-    res = minimize(func_ta2, [time_bias, 1], (ts1[start1:end1] - ts1[0], ts2[start2:end2] - ts2[0], new_d1, d2_),
-                   method='Nelder-Mead')
-
-    time_bias, time_scale = res.x
-
-    new_t2 = t2 * time_scale + time_bias
-
-    # # ts1[i] - ts1[0] = (t2[i] * time_scale + time_bias) - ts2[0]
-    # ts1[i] = t2[i] * time_scale + time_bias - ts2[0] + ts1[0]
-
-    # bias + ts1[0] - ts2[0] * scale
-    return time_bias - ts2[0] * time_scale + ts1[0], time_scale  # time to add to t2 clock
-
-
-# def temporal_diff4(ts1, traj1, ts2, traj2):
-#
-#     def func_ta(x, t1, t2, d1, d2):
-#
-#         time_bias, time_scale, mag_scale, drift_bias, drift_scale = x
-#
-#         # new_t2 = t2 * time_scale + time_bias
-#         new_t2 = t2 + time_bias
-#         mask = (t1 > new_t2[0]) & (t1 < new_t2[-1])
-#         interp = interpolate.interp1d(new_t2, d2)(t1[mask])
-#         new_d1 = d1 * mag_scale + (t1 - t1[0]) * drift_scale + drift_bias
-#
-#         return np.linalg.norm(new_d1[mask] - interp)
-#         return Utils.RMSe(new_d1[mask] - interp)
-#
-#
-#     d1_ = Utils.matrix2mag(traj1)
-#     d2_ = scipy.signal.medfilt(Utils.matrix2mag(traj2), 9)
-#
-#
-#     s = 10
-#
-#     f1 = s*1
-#     v1_ = (d1_[f1:]-d1_[:-f1]) / (ts1[f1:]-ts1[:-1*f1])
-#     a1_ = (v1_[f1:]-v1_[:-f1]) / (ts1[2*f1:]-ts1[:-2*f1])
-#     ad1_ = (a1_[f1:]-a1_[:-f1]) / (ts1[3*f1:]-ts1[:-3*f1])
-#
-#     f2 = s*8
-#     v2_ = (d2_[f2:]-d2_[:-f2]) / (ts2[f2:]-ts2[:-f2])
-#     a2_ = (v2_[f2:]-v2_[:-f2]) / (ts2[2*f2:]-ts2[:-(2*f2)])
-#     ad2_ = (a2_[f2:]-a2_[:-f2]) / (ts2[3*f2:]-ts2[:-(3*f2)])
-#
-#     v_thresh = 0.014 * 0.001
-#     start1 = np.argmax(v1_ > v_thresh) + f1
-#     start2 = np.argmax(v2_ > v_thresh) + f2
-#
-#     sec = 2
-#     end1 = min(len(ts1)-1, start1 + sec*30)
-#     end2 = min(len(ts2)-1, start2 + sec*240)
-#
-#
-#
-#     res = minimize(func_ta, [0, 1, 1, 0, 1], (ts1-ts1[0], ts2-ts2[0], d1_, d2_), method='Nelder-Mead')    # good!!! # [3347.734]
-#     res = minimize(func_ta, [0, 1, 1, 0, 1], (ts1[start1:end1]-ts1[0], ts2[start2:end2]-ts2[0], d1_[start1:end1], d2_[start2:end2]), method='Nelder-Mead')
-#
-#     # # ts1[i] - ts1[0] + res.x = ts2[i] - t2[0]
-#     # ts1[i] = ts2[i] + (ts1[0] - ts2[0] - res.x)
-#
-#
-#
-#     print(res.x, func_ta(res.x, ts1-ts1[0], ts2-ts2[0], d1_, d2_))
-#
-#     time_bias, time_scale, mag_scale, drift_bias, drift_scale = res.x
-#     t1 = ts1-ts1[0]
-#     t2 = ts2-ts2[0]
-#
-#     d1 = d1_
-#     d2 = d2_
-#
-#     new_t2 = t2 * time_scale + time_bias
-#     new_t2 = t2 + time_bias
-#     mask = (t1 > new_t2[0]) & (t1 < new_t2[-1])
-#     interp = interpolate.interp1d(new_t2, d2)(t1[mask])
-#     new_d1 = d1 * mag_scale + (ts1 - ts1[0]) * drift_scale + drift_bias
-#
-#     return res.x  # time to add to t2 clock
-
-
-# def temporal_sync(ts1, rot1, ts2, rot2):
-#     #
-#     return 0.   # time diff
-
-
-post_process_S, post_process_M = 300, 600
-p1_sec, p2_sec, p3_sec = 3.5, 7.5, 5
-
-
 def find_static_phase(t, d, interval_sec=0.5, seq_min_sec_len=0.5, d_ker=3):
 
     sec2msec = 1000
@@ -645,7 +275,11 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, stat_ts):
         # plt.legend()
         # plt.show()
 
-    print('time sync phase 1 res = ', res.x, ', error = ', imu_drift_loss(res.x, t1_, t2_, d1_, d2_))
+    print('time sync phase 1 res = ', res.x, ', error all = ', imu_drift_loss(res.x, t1_, t2_, d1_, d2_))
+    print('time sync phase 1 res = ', res.x, ', error fit = ', imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
+    t1_mask = (t1_ > stat_ts[1][1])
+    t2_mask = (t2_ > stat_ts[1][1])
+    print('time sync phase 1 res = ', res.x, ', error test = ', imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
     return t1_, new_d1, new_t2, d2_
     return t1_ + ts1[0] - init_diff, new_d1, new_t2 + ts1[0] - init_diff, d2_
 
@@ -690,28 +324,6 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
     t2_mask = (t2_ > stat_ts[0][1]) & (t2_ < stat_ts[1][0])
 
 
-    # fps1, fps2 = 30, 240
-    # # todo: use ts vec to find pairs (or add nans when missing data instead of frame drop
-    # f1 = interval_sec * fps1 // fps1
-    # v1_ = (d1_[f1:] - d1_[:-f1]) / (t1_[f1:] - t1_[:-1 * f1])
-    #
-    # f2 = interval_sec * fps2 // fps1
-    # v2_ = (d2_[f2:] - d2_[:-f2]) / (t2_[f2:] - t2_[:-f2])
-    #
-    # # todo: use ts vec to find pairs (or add nans when missing data instead of frame drop
-    # v_thresh = velocity_mm_per_ms * 0.001
-    # start1 = np.argmax(v1_ > v_thresh) + f1
-    # start2 = np.argmax(v2_ > v_thresh) + f2
-    #
-    # # end1 = min(len(ts1) - 1, start1 + seq_sec * 30)
-    # end1 = min(len(ts1) - 1, start1 + seq_sec * 30, post_process_S + post_process_M)
-    # end2 = min(len(ts2) - 1, start2 + seq_sec * 240)
-    #
-    # # # option a: check diff and remove non fit dist
-    # # # option b: search the nearest time in vector (maybe)
-    # # ts_diff1 = t1_[f1:] - t1_[:-1*f1]
-    # # mask1 = ts_diff1 < (fps1 * interval_sec)
-    # # mask1 = ts_diff1 < 350
 
     if False:
         res = minimize(time_scale_and_bias_loss, [0, 1],
@@ -734,6 +346,10 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
         func = time_bias_loss
 
         print('time sync phase 2 res = ', res.x, ', all error = ', func(res.x, t1_, t2_, d1_, d2_))
+        print('time sync phase 2 res = ', res.x, ', fit error = ', func(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
+        t1_mask = (t1_ > stat_ts[1][1])
+        t2_mask = (t2_ > stat_ts[1][1])
+        print('time sync phase 2 res = ', res.x, ', test error = ', func(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
     else:
         min_r = 99999
         min_i = None
@@ -821,12 +437,24 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
     gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
     # gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc).interpolate(data.ts)
 
+    gt_out = 'gt'
+    os.makedirs(os.path.join(data.folder, gt_out), exist_ok=True)
+    for pkl_path, gt_ts, gt_pose in zip(np.asarray(data.pkls)[data_ts_mask], gt_est.timestamp, gt_est.pose):
+        pkl = Utils.load_pkl(pkl_path)
+        if pkl['ts'] == gt_ts: # if all goes good should be always true
+            pkl['gt_pose'] = gt_pose.copy()
+            pkl['gt_pose'][..., :3, 3] *= 0.001
+            # print(gt_ts, pkl['gt_pose'][..., :3, 3])
+            Utils.save_pkl((lambda x: os.path.join(x[0], gt_out, x[1]))(os.path.split(pkl_path)), pkl)
+        else:
+            print('****** error', pkl_path, pkl['ts'], gt_ts)
+
     if doEval:
         print('start eval using', evalDataPath)
         im_pose = ImageChessboardPose()
         im_pose.init_from_folder(evalDataPath)
 
-        color_pose = [im_pose.get_pose(c.copy())[0] for c in data.color]
+        color_pose = [im_pose.get_pose(c.copy(), show=True, draw_coord=True)[0] for c in data.color]
         color_pose = np.asarray([Utils.inv(p) if p is not None else np.eye(4) * np.nan for p in color_pose])
 
         cpt_orig_mask = (data.ts > stat[1][0] + 200) & (data.ts < stat[1][1] - 200)
@@ -865,7 +493,6 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
                 plt.legend()
                 plt.show()
 
-
         if False:
             plt.figure()
             plt.scatter(cpt.timestamp, cpt.rel()[:, 0, 3], s=2, label='tx color pose')
@@ -881,115 +508,18 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
     # todo: drop gt_est to
 
 
-def post_process1(capture_folder, ghc_path, doEval=False, evalDataPath=None):
-    data = DataReader(capture_folder)
-    imu_rot_rad_euler, imu_time = calc_imu_rotation(data.accel_ts, data.accel, data.gyro_ts, data.gyro)
-    imu_idx = 'g'  # 'ag'  # 'a'   #
-    imu_idx = 'ag'  # 'a'   # 'g'   #
-    imu = Trajectory(imu_time[imu_idx], Utils.euler2matrix(imu_rot_rad_euler[imu_idx], degrees=False))
-
-    opti_data = OptiReader(osp.join(capture_folder, 'opti_pose_list.csv'))
-    opti = Trajectory(opti_data.ts.copy(), opti_data.pose.copy())
-
-    opti2 = Trajectory(opti_data.ts.copy(), opti_data.pose.copy())
-    opti3 = Trajectory(opti_data.ts.copy(), opti_data.pose.copy())
-    opti4 = Trajectory(opti_data.ts.copy(), opti_data.pose.copy())
-
-    time_diff = temporal_diff(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
-    print('ta diff', time_diff)
-    time_diff2 = temporal_diff2(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
-    print('ta diff 2', time_diff2)
-    time_diff3 = temporal_diff3(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
-    print('ta diff 3', time_diff3)
-    time_diff4 = temporal_diff4(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
-    print('ta diff 4', time_diff4)
-    # todo A: RMSe
-    # todo B: learn scale
-    ghc = Utils.load_pkl(ghc_path)
-    opti.timestamp += time_diff
-    gt_estimation = opti.project(ghc).interpolate(data.ts)
-    # todo: est = chg @ opti.rel(orig=avg of X first static poses) @ ghc # todo next: avg between X static poses
-    opti2.timestamp = opti2.timestamp * time_diff2[1] + time_diff2[0]
-    gt_estimation2 = opti2.project(ghc).interpolate(data.ts)
-
-    opti3.timestamp += time_diff3
-    gt_estimation3 = opti3.project(ghc).interpolate(data.ts)
-
-    opti4.timestamp = opti4.timestamp * time_diff4[1] + time_diff4[0]
-    gt_estimation4 = opti4.project(ghc).interpolate(data.ts)
-
-    if doEval:
-        im_pose = ImageChessboardPose()
-        im_pose.init_from_folder(evalDataPath)
-
-        color_pose = [im_pose.get_pose(c.copy())[0] for c in data.color]
-        color_pose = np.asarray([Utils.inv(p) if p is not None else np.eye(4) * np.nan for p in color_pose])
-
-        cpt_inv = Trajectory(data.ts, Utils.inv(color_pose))
-        cpt = Trajectory(data.ts, color_pose)
-        nandist = Utils.trans_dist(Utils.inv(cpt.rel()[1:]) @ gt_estimation.pose)
-        nandist = Utils.trans_dist(Utils.inv(cpt.rel()[4:]) @ gt_estimation.pose)
-        dist = nandist[~np.isnan(nandist)]
-
-        rmse = ((dist ** 2).sum() / np.count_nonzero(~np.isnan(dist))) ** 1 / 2
-
-        print('rmse error', rmse)
-
-        # nandist2 = Utils.trans_dist(Utils.inv(cpt.rel()[1:]) @ gt_estimation2.pose)
-        # dist2 = nandist2[~np.isnan(nandist2)]
-        #
-        # rmse2 = ((dist2 ** 2).sum() / np.count_nonzero(~np.isnan(dist2))) ** 1/2
-        #
-        # print('rmse error 2', rmse2)
-
-        nandist3 = Utils.trans_dist(Utils.inv(cpt.rel()[1:]) @ gt_estimation3.pose)
-        dist3 = nandist3[~np.isnan(nandist3)]
-
-        rmse3 = ((dist3 ** 2).sum() / np.count_nonzero(~np.isnan(dist3))) ** 1 / 2
-
-        print('rmse error 3', rmse3)
-
-        nandist4 = Utils.trans_dist(Utils.inv(cpt.rel()[1:]) @ gt_estimation4.pose)
-        dist4 = nandist4[~np.isnan(nandist4)]
-
-        rmse4 = ((dist4 ** 2).sum() / np.count_nonzero(~np.isnan(dist4))) ** 1 / 2
-
-        print('rmse error 4', rmse4)
-
-        ggg = Trajectory(opti_data.ts * time_diff4[1] + time_diff4[0] + 100, opti_data.pose.copy()).project(
-            ghc).interpolate(
-            data.ts)
-
-        ddd
-
-        x = 11
-
-        ...
-
-    # dump gt data to pkl
-
-    x = 11
-
-    # read cam data
-    #   calc imu rot (relative)
-    # read opti data
-    #   remove relative large error and spikes (cpp code available)
-    # read ghc
-    # calc est # verify the need
-    # calc ta
-    # project + interpolate
-    # asset - optional:  calc cam pose and trans error
-    # dump new pkl
-    return False
-
-
 if __name__ == '__main__':
     with np.printoptions(suppress=True, precision=3):
-        # post_process(r'F:\AMR\record\20211114-151800',
-        # post_process(r'F:\AMR\record\20211114-162227',
-        post_process(r'F:\AMR\record\20211114-172436-p-good',
-                     r'F:\AMR\calib-dc\calib-20211114-134246\gHc_nelder-mead-from-scratch.pkl',
-                     True, r'D:\AMR\gtool\ClientSample\src\gt_raw')
+
+        post_process(r'C:\Users\rsheinin\record\20211116-142717',
+                     r'..\capture_tool\gt_raw\gHc_nelder-mead-from-scratch.pkl',
+                     True, r'..\capture_tool\gt_raw')
+
+        # # post_process(r'F:\AMR\record\20211114-151800',
+        # # post_process(r'F:\AMR\record\20211114-162227',
+        # post_process(r'F:\AMR\record\20211114-172436-p-good',
+        #              r'F:\AMR\calib-dc\calib-20211114-134246\gHc_nelder-mead-from-scratch.pkl',
+        #              True, r'D:\AMR\gtool\ClientSample\src\gt_raw')
 
         # # # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-141653',
         # # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-141343',
@@ -1018,18 +548,3 @@ if __name__ == '__main__':
         # # # #     r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
         # # # #     True, r'D:\mevolve\data\amr\record\gt_raw'
         # # # # )
-
-    # post_process1(
-    #     # # # # r'D:\mevolve\data\amr\record\20211108-130024',
-    #     r'D:\mevolve\data\amr\record\20211108-131542', #'sin' like init phase
-    #     # # # r'D:\mevolve\data\amr\record\20211108-142256',
-    #     # r'D:\mevolve\data\amr\record\20211109-093652',
-    #     # r'D:\mevolve\data\amr\record\omer_time_calib_type_1\20211109-111409',
-    #     r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
-    #     True, r'D:\mevolve\data\amr\record\gt_raw'
-    # )
-    # # post_process1(
-    # #     r'D:\mevolve\data\amr\record\20211101-125437',
-    # #     r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
-    # #     True, r'D:\mevolve\data\amr\record\gt_raw'
-    # # )

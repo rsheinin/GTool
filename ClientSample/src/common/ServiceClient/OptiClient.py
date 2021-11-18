@@ -1,4 +1,4 @@
-from ServiceClient.GTServiceClient import GTServiceClient
+from common.ServiceClient.GTServiceClient import GTServiceClient
 
 
 class OptiClient(GTServiceClient):
