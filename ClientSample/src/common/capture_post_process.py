@@ -65,16 +65,33 @@ class OptiReader:
 
         self.ts = self.df.timestamp.values
 
+
         self.pose = np.column_stack([
             self.df[self.ROTMAT_TRANS].astype(np.float).values,
             np.asarray([[0, 0, 0, 1]] * len(self.df))
         ]).reshape((-1, 4, 4))
         self.error = self.df.error.values
 
+        intr = 1000 / 30
+        mask = [(self.ts > t - intr / 2) & (self.ts < t + intr / 2) for t in self.ts]
+        self.avg_pose = np.asarray([Utils.median_transformation(self.pose[m]) for m in mask])
+        # self.avg_pose = np.asarray([Utils.average_transformation(self.pose[m]) for m in mask])
+
+        # p_rel = Utils.inv(self.pose[0]) @ self.pose
+        # p_euler = Utils.matrix2euler(p_rel)
+        # p_trans = p_rel[..., :3, 3]
+        #
+        # ap_rel = Utils.inv(self.avg_pose[0]) @ self.avg_pose
+        # ap_euler = Utils.matrix2euler(ap_rel)
+        # ap_trans = ap_rel[..., :3, 3]
+
+        # self.avg_pose = self.pose
+
         if True:
             idx = np.where(self.ts[1:] != self.ts[:-1])[0]
             self.ts = self.ts[idx]
             self.pose = self.pose[idx]
+            self.avg_pose = self.avg_pose[idx]
             self.error = self.error[idx]
 
     def filter(self, df):
@@ -425,7 +442,6 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
         return
 
     ghc = Utils.load_pkl(ghc_path)
-    gt_est = Trajectory(new_opti_ts, opti_data.pose.copy()).project(ghc).interpolate(data.ts)
     offset = 0
     offset = 1000 / 30
 
@@ -434,7 +450,10 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
     data_ts_mask = data.ts > (stat[1][1] - 1000)
     opti_orig_mask = (new_opti_ts > stat[1][0] + 200) & (new_opti_ts < stat[1][1] - 200)
     opti_orig_mat = Utils.average_transformation(opti_data.pose[opti_orig_mask])
-    gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+
+    # gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+    gt_est = Trajectory(new_opti_ts + offset, opti_data.avg_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+
     # gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc).interpolate(data.ts)
 
     gt_out = 'gt'
@@ -512,6 +531,7 @@ if __name__ == '__main__':
     with np.printoptions(suppress=True, precision=3):
 
         post_process(r'C:\Users\rsheinin\record\20211116-142717',
+        # post_process(r'\\mevolve-win\wbm-trial-01-60deg-noirnoise\for_Riki\20211118-105708',
                      r'..\capture_tool\gt_raw\gHc_nelder-mead-from-scratch.pkl',
                      True, r'..\capture_tool\gt_raw')
 
