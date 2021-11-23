@@ -1,0 +1,9 @@
+numpy
+opencv-python
+pefile
+pyinstaller
+pyinstaller-hooks-contrib
+pyrealsense2
+pandas
+matplotlib
+scipy
