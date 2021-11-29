@@ -584,7 +584,7 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     opti_data = OptiReader(osp.join(capture_folder, 'opti_pose_list.csv'))
     opti = Trajectory(opti_data.ts.copy(), opti_data.pose.copy())
 
-    Utils.inv(opti.interpolate(opti.timestamp + 500, True).pose) @ opti.pose
+    # Utils.inv(opti.interpolate(opti.timestamp + 500, True).pose) @ opti.pose
 
     new_opti_ts, stat, res_out = time_sync(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
     if new_opti_ts is None:
