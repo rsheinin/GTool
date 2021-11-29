@@ -12,7 +12,9 @@ import os, os.path as osp
 import re
 import pickle
 import itertools
+import tqdm
 
+from multiprocessing import Pool
 from collections import defaultdict, OrderedDict
 
 from common.Utils import Utils, ImageChessboardPose
@@ -65,7 +67,6 @@ class OptiReader:
 
         self.ts = self.df.timestamp.values
 
-
         self.pose = np.column_stack([
             self.df[self.ROTMAT_TRANS].astype(np.float).values,
             np.asarray([[0, 0, 0, 1]] * len(self.df))
@@ -74,8 +75,8 @@ class OptiReader:
 
         intr = 1000 / 30
         mask = [(self.ts > t - intr / 2) & (self.ts < t + intr / 2) for t in self.ts]
-        self.avg_pose = np.asarray([Utils.median_transformation(self.pose[m]) for m in mask])
-        # self.avg_pose = np.asarray([Utils.average_transformation(self.pose[m]) for m in mask])
+        self.med_pose = np.asarray([Utils.median_transformation(self.pose[m]) for m in mask])
+        self.avg_pose = np.asarray([Utils.average_transformation(self.pose[m]) for m in mask])
 
         # p_rel = Utils.inv(self.pose[0]) @ self.pose
         # p_euler = Utils.matrix2euler(p_rel)
@@ -92,10 +93,12 @@ class OptiReader:
             self.ts = self.ts[idx]
             self.pose = self.pose[idx]
             self.avg_pose = self.avg_pose[idx]
+            self.med_pose = self.med_pose[idx]
             self.error = self.error[idx]
 
     def filter(self, df):
         t_error = 0.1
+        # t_error = 0.001
         markers_in_scence_col_idx = 22
         markers_in_scence_col = df.columns[markers_in_scence_col_idx]
         markers_col = df.columns[markers_in_scence_col_idx - 1]
@@ -240,7 +243,7 @@ def find_static_phase(t, d, interval_sec=0.5, seq_min_sec_len=0.5, d_ker=3):
 
     ret = [(s, e) for s, e in zip(start[m], end[m])]
 
-    if True:
+    if False:
         plt.figure()
         plt.scatter(t, d, s=2, label='d')
         for i, (s, e) in enumerate(ret):
@@ -253,6 +256,39 @@ def find_static_phase(t, d, interval_sec=0.5, seq_min_sec_len=0.5, d_ker=3):
 
 def sync_time_phase1(ts1, data1d1, ts2, data1d2, stat_ts):
     # fix imu drift and scale
+
+    def imu_drift_bias_scale_loss(x, t1, t2, d1, d2):
+        drift_bias, drift_scale = x
+
+        mask = (t1 > t2[0]) & (t1 < t2[-1])
+        interp = interpolate.interp1d(t2, d2)(t1[mask])
+        new_d1 = d1 + (t1 - t1[0]) * drift_scale + drift_bias
+
+        return Utils.RMSe(new_d1[mask] - interp)
+
+    def imu_scale_loss(x, t1, t2, d1, d2):
+        time_bias, mag_scale = x
+
+        new_t2 = t2 + time_bias
+        mask = (t1 > new_t2[0]) & (t1 < new_t2[-1])
+        interp = interpolate.interp1d(new_t2, d2)(t1[mask])
+        new_d1 = d1 * mag_scale
+
+        return np.linalg.norm(new_d1[mask] - interp)
+        return Utils.RMSe(new_d1[mask] - interp)
+
+    def imu_scale_loss2(x, t1, t2, d1, d2):
+        time_bias, mag_scale, y_bias = x
+
+        new_t2 = t2 + time_bias
+        mask = (t1 > new_t2[0]) & (t1 < new_t2[-1])
+        interp = interpolate.interp1d(new_t2, d2)(t1[mask])
+        new_d1 = d1 * mag_scale + y_bias
+
+        return np.linalg.norm(new_d1[mask] - interp)
+        return Utils.RMSe(new_d1[mask] - interp)
+
+
     def imu_drift_loss(x, t1, t2, d1, d2):
         time_bias, mag_scale, drift_bias, drift_scale = x
 
@@ -267,18 +303,106 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, stat_ts):
     t1_, t2_ = ts1, ts2
     d1_, d2_ = data1d1, data1d2
 
-    t1_mask = (t1_ > stat_ts[0][0]) & (t1_ < stat_ts[1][1])
-    t2_mask = (t2_ > stat_ts[0][0]) & (t2_ < stat_ts[1][1])
-
-    res = minimize(imu_drift_loss, [0, 1, 0, 1],
-                   (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
-                   method='Nelder-Mead')
-
-    time_bias, mag_scale, drift_bias, drift_scale = res.x
-    new_t2 = t2_ + time_bias
-    new_d1 = d1_ * mag_scale + (ts1 - ts1[0]) * drift_scale + drift_bias
-
     if True:
+        t1_mask = (t1_ > stat_ts[0][0]) & (t1_ < stat_ts[1][1])
+        t2_mask = (t2_ > stat_ts[0][0]) & (t2_ < stat_ts[1][1])
+
+        res = minimize(imu_drift_loss, [0, 1, 0, 1],
+                       (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
+                       method='Nelder-Mead')
+        time_bias, mag_scale, drift_bias, drift_scale = res.x
+        new_t2 = t2_ + time_bias
+        new_d1 = d1_ * mag_scale + (ts1 - ts1[0]) * drift_scale + drift_bias
+
+
+        res_out = [drift_bias, drift_scale, np.nan, np.nan, np.nan, time_bias, mag_scale]
+
+        tmp = imu_drift_loss(res.x, t1_, t2_, d1_, d2_)
+        print('imu_drift_loss res = ', res.x, ', error all = ', tmp)
+        res_out += [tmp]
+
+        tmp = imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
+        print('imu_drift_loss res = ', res.x, ', error fit = ', tmp)
+        res_out += [tmp]
+
+        t1_mask = (t1_ > stat_ts[1][1] + 1000)
+        t2_mask = (t2_ > stat_ts[1][1] + 1000)
+        tmp = imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
+        print('imu_drift_loss res = ', res.x, ', error test = ', tmp)
+        res_out += [tmp]
+
+
+    else:
+        t1_mask = (t1_ > stat_ts[1][0]) & (t1_ < stat_ts[1][1])
+        t2_mask = (t2_ > stat_ts[1][0]) & (t2_ < stat_ts[1][1])
+        # t1_mask = (t1_ > stat_ts[0][0]) & (t1_ < stat_ts[0][1])
+        # t2_mask = (t2_ > stat_ts[0][0]) & (t2_ < stat_ts[0][1])
+
+        # res = minimize(imu_drift_bias_scale_loss, [0, 1],
+        res = minimize(imu_drift_bias_scale_loss, [d2_[t2_mask][0] - d1_[t1_mask][0], 1],
+                       (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
+                       method='Nelder-Mead')
+
+        drift_bias, drift_scale = res.x
+        new_d1 = d1_ + (t1_ - t1_[t1_mask][0]) * drift_scale + drift_bias
+
+        res_out = [*res.x]
+
+        tmp = imu_drift_bias_scale_loss(res.x, t1_, t2_, d1_, d2_)
+        print('imu_drift_bias_scale_loss res = ', res.x, ', error all = ', tmp)
+        res_out += [tmp]
+
+        tmp = imu_drift_bias_scale_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
+        print('imu_drift_bias_scale_loss res = ', res.x, ', error fit = ', tmp)
+        res_out += [tmp]
+
+        t1_mask = (t1_ > stat_ts[1][1] + 1000)
+        t2_mask = (t2_ > stat_ts[1][1] + 1000)
+        tmp = imu_drift_bias_scale_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
+        print('imu_drift_bias_scale_loss res = ', res.x, ', error test = ', tmp)
+        res_out += [tmp]
+
+        if True:
+            t1_mask = (t1_ > stat_ts[0][0]) & (t1_ < stat_ts[1][1])
+            t2_mask = (t2_ > stat_ts[0][0]) & (t2_ < stat_ts[1][1])
+
+            res = minimize(imu_scale_loss, [0, 1],
+                           (t1_[t1_mask], t2_[t2_mask], new_d1[t1_mask], d2_[t2_mask]),
+                           method='Nelder-Mead')
+
+            res_out += [*res.x]
+
+            time_bias, mag_scale = res.x
+            new_t2 = t2_ + time_bias
+            new_d1 = new_d1 * mag_scale
+
+            tmp = imu_scale_loss(res.x, t1_, t2_, d1_, d2_)
+            print('imu_scale_loss res = ', res.x, ', error all = ', tmp)
+            res_out += [tmp]
+
+            tmp = imu_scale_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
+            print('imu_scale_loss res = ', res.x, ', error fit = ', tmp)
+            res_out += [tmp]
+
+            t1_mask = (t1_ > stat_ts[1][1] + 1000)
+            t2_mask = (t2_ > stat_ts[1][1] + 1000)
+            tmp = imu_scale_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
+            print('imu_scale_loss res = ', res.x, ', error test = ', tmp)
+            res_out += [tmp]
+
+        else:
+            t1_mask = (t1_ > stat_ts[0][1] + 1000) & (t1_ < stat_ts[1][0])
+            t2_mask = (t2_ > stat_ts[0][1] + 1000) & (t2_ < stat_ts[1][0])
+
+            res = minimize(imu_scale_loss2, [0, 1, 0],
+                           (t1_[t1_mask], t2_[t2_mask], new_d1[t1_mask], d2_[t2_mask]),
+                           method='Nelder-Mead')
+            print('imu_scale_loss2 res = ', res.x, ', error all = ', imu_scale_loss2(res.x, t1_, t2_, d1_, d2_))
+            time_bias, mag_scale, y_bias = res.x
+            new_t2 = t2_ + time_bias
+            new_d1 = new_d1 * mag_scale + y_bias
+
+    if False:
         plt.figure()
         plt.scatter(t1_, d1_, s=2, label='imu')
         plt.scatter(t1_, new_d1, s=2, label='imu fix')
@@ -292,12 +416,12 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, stat_ts):
         # plt.legend()
         # plt.show()
 
-    print('time sync phase 1 res = ', res.x, ', error all = ', imu_drift_loss(res.x, t1_, t2_, d1_, d2_))
-    print('time sync phase 1 res = ', res.x, ', error fit = ', imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
-    t1_mask = (t1_ > stat_ts[1][1])
-    t2_mask = (t2_ > stat_ts[1][1])
-    print('time sync phase 1 res = ', res.x, ', error test = ', imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
-    return t1_, new_d1, new_t2, d2_
+    # print('time sync phase 1 res = ', res.x, ', error all = ', imu_drift_loss(res.x, t1_, t2_, d1_, d2_))
+    # print('time sync phase 1 res = ', res.x, ', error fit = ', imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
+    # t1_mask = (t1_ > stat_ts[1][1])
+    # t2_mask = (t2_ > stat_ts[1][1])
+    # print('time sync phase 1 res = ', res.x, ', error test = ', imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
+    return (t1_, new_d1, new_t2, d2_), res_out
     return t1_ + ts1[0] - init_diff, new_d1, new_t2 + ts1[0] - init_diff, d2_
 
 
@@ -358,15 +482,32 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
         #                method='Nelder-Mead', bounds=[(-60, 100)])
         res = minimize(time_bias_loss, [0], (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
                         method='Nelder-Mead')
+
         time_bias, = res.x
         time_scale = 1
         func = time_bias_loss
 
-        print('time sync phase 2 res = ', res.x, ', all error = ', func(res.x, t1_, t2_, d1_, d2_))
-        print('time sync phase 2 res = ', res.x, ', fit error = ', func(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
-        t1_mask = (t1_ > stat_ts[1][1])
-        t2_mask = (t2_ > stat_ts[1][1])
-        print('time sync phase 2 res = ', res.x, ', test error = ', func(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
+        res_out = [*res.x]
+
+        tmp = time_bias_loss(res.x, t1_, t2_, d1_, d2_)
+        print('time_bias_loss res = ', res.x, ', error all = ', tmp)
+        res_out += [tmp]
+
+        tmp = time_bias_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
+        print('time_bias_loss res = ', res.x, ', error fit = ', tmp)
+        res_out += [tmp]
+
+        t1_mask = (t1_ > stat_ts[1][1] + 1000)
+        t2_mask = (t2_ > stat_ts[1][1] + 1000)
+        tmp = time_bias_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
+        print('time_bias_loss res = ', res.x, ', error test = ', tmp)
+        res_out += [tmp]
+
+        # print('time sync phase 2 res = ', res.x, ', all error = ', func(res.x, t1_, t2_, d1_, d2_))
+        # print('time sync phase 2 res = ', res.x, ', fit error = ', func(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
+        # t1_mask = (t1_ > stat_ts[1][1])
+        # t2_mask = (t2_ > stat_ts[1][1])
+        # print('time sync phase 2 res = ', res.x, ', test error = ', func(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
     else:
         min_r = 99999
         min_i = None
@@ -384,7 +525,7 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
 
     new_t2 = t2_[0] + (t2_ - t2_[0]) * time_scale + time_bias
 
-    if True:
+    if False:
         plt.figure()
         plt.scatter(t1_, d1_, s=2, label='imu fix')
         plt.scatter(new_t2, d2_, s=2, label='opti')
@@ -394,7 +535,7 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
     # print('time sync phase 2 res = ', res.x, ', fit error = ',
     #       func(res.x, t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]))
     # print('time sync phase 2 res = ', res.x, ', all error = ', func(res.x, t1_, t2_, d1_, d2_))
-    return t1_, d1_, new_t2, d2_
+    return (t1_, d1_, new_t2, d2_), res_out
 
 
 def time_sync(ts1, traj1, ts2, traj2, init_diff=1000, interval_sec=10, velocity_mm_per_ms=0.014, seq_sec=15):
@@ -408,13 +549,13 @@ def time_sync(ts1, traj1, ts2, traj2, init_diff=1000, interval_sec=10, velocity_
     d2_stat = find_static_phase(t2_, d2_)
     if len(d2_stat) < 2:
         print('could not found static phase > 2.5 sec')
-        return None, None
+        return None, None, None
 
-    t1__, d1__, t2__, d2__ = sync_time_phase1(t1_, d1_, t2_, d2_, d2_stat)
-    t1___, d1___, t2___, d2___ = sync_time_phase2(t1__ - offset, d1__, t2__ - offset, d2__,
+    (t1__, d1__, t2__, d2__), res_out_1 = sync_time_phase1(t1_, d1_, t2_, d2_, d2_stat)
+    (t1___, d1___, t2___, d2___), res_out_2 = sync_time_phase2(t1__ - offset, d1__, t2__ - offset, d2__,
                                                   d2_stat - offset, interval_sec, velocity_mm_per_ms, seq_sec)
 
-    return t2___, d2_stat - offset
+    return t2___, d2_stat - offset, res_out_1 + res_out_2
 
 
 def debug_data(data):
@@ -422,12 +563,12 @@ def debug_data(data):
     plt.show()
 
 
-def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
+def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDump=False, outfile=None):
     print('start post process on', capture_folder)
 
     data = DataReader(capture_folder)
 
-    debug_data(data)
+    # debug_data(data)
 
     imu_rot_rad_euler, imu_time = calc_imu_rotation(data.accel_ts, data.accel, data.gyro_ts, data.gyro)
     imu_idx = 'ag'  # 'a'   # 'g'   #
@@ -437,7 +578,7 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
     opti_data = OptiReader(osp.join(capture_folder, 'opti_pose_list.csv'))
     opti = Trajectory(opti_data.ts.copy(), opti_data.pose.copy())
 
-    new_opti_ts, stat = time_sync(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
+    new_opti_ts, stat, res_out = time_sync(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
     if new_opti_ts is None:
         return
 
@@ -451,50 +592,82 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
     opti_orig_mask = (new_opti_ts > stat[1][0] + 200) & (new_opti_ts < stat[1][1] - 200)
     opti_orig_mat = Utils.average_transformation(opti_data.pose[opti_orig_mask])
 
-    # gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
-    gt_est = Trajectory(new_opti_ts + offset, opti_data.avg_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+    gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+    gt_avg_est = Trajectory(new_opti_ts + offset, opti_data.avg_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+    gt_med_est = Trajectory(new_opti_ts + offset, opti_data.med_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
 
-    # gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc).interpolate(data.ts)
 
-    gt_out = 'gt'
-    os.makedirs(os.path.join(data.folder, gt_out), exist_ok=True)
-    for pkl_path, gt_ts, gt_pose in zip(np.asarray(data.pkls)[data_ts_mask], gt_est.timestamp, gt_est.pose):
-        pkl = Utils.load_pkl(pkl_path)
-        if pkl['ts'] == gt_ts: # if all goes good should be always true
-            pkl['gt_pose'] = gt_pose.copy()
-            pkl['gt_pose'][..., :3, 3] *= 0.001
-            # print(gt_ts, pkl['gt_pose'][..., :3, 3])
-            Utils.save_pkl((lambda x: os.path.join(x[0], gt_out, x[1]))(os.path.split(pkl_path)), pkl)
-        else:
-            print('****** error', pkl_path, pkl['ts'], gt_ts)
+    if outfile is not None:
+        outfile.write(','.join([capture_folder] + [f'{s:.06}' for s in res_out]))
+
+    if doDump is True:
+        gt_out = 'gt'
+        os.makedirs(os.path.join(data.folder, gt_out), exist_ok=True)
+        #todo: avg, med...........
+        for pkl_path, gt_ts, gt_pose in zip(np.asarray(data.pkls)[data_ts_mask], gt_est.timestamp, gt_est.pose):
+            pkl = Utils.load_pkl(pkl_path)
+            if pkl['ts'] == gt_ts: # if all goes good should be always true
+                pkl['gt_pose'] = gt_pose.copy()
+                pkl['gt_pose'][..., :3, 3] *= 0.001
+                # print(gt_ts, pkl['gt_pose'][..., :3, 3])
+                Utils.save_pkl((lambda x: os.path.join(x[0], gt_out, x[1]))(os.path.split(pkl_path)), pkl)
+            else:
+                print('****** error', pkl_path, pkl['ts'], gt_ts)
 
     if doEval:
         print('start eval using', evalDataPath)
         im_pose = ImageChessboardPose()
         im_pose.init_from_folder(evalDataPath)
 
-        color_pose = [im_pose.get_pose(c.copy(), show=True, draw_coord=True)[0] for c in data.color]
-        color_pose = np.asarray([Utils.inv(p) if p is not None else np.eye(4) * np.nan for p in color_pose])
+        # # color_pose = [im_pose.get_pose(c.copy(), show=True, draw_coord=True)[0] for c in data.color]
+        # # color_pose = np.asarray([Utils.inv(p) if p is not None else np.eye(4) * np.nan for p in color_pose])
+        # with Pool(10) as p:
+        #     color_pose = p.starmap(im_pose.get_pose, tqdm.tqdm([(c,) for c in data.color]))
+        color_pose = []
+        for c in tqdm.tqdm(data.color):
+            color_pose += [im_pose.get_pose(c)]
+        color_pose = np.asarray([Utils.inv(p[0]) if p[0]is not None else np.eye(4) * np.nan for p in color_pose])
 
         cpt_orig_mask = (data.ts > stat[1][0] + 200) & (data.ts < stat[1][1] - 200)
         cpt_orig_mat = Utils.average_transformation(color_pose[cpt_orig_mask])
         cpt = Trajectory(data.ts[data_ts_mask], color_pose[data_ts_mask])
         cpt_rel = cpt.rel(orig=cpt_orig_mat)
-        cpt_gt_diff = Utils.inv(cpt_rel) @ gt_est.pose
 
-        print('RMSE error (rot)', Utils.RMSe(Utils.matrix2mag(cpt_gt_diff)) * 180 / np.pi)
-        print('RMSE error (trans)', Utils.RMSe(Utils.trans_dist(cpt_gt_diff)))
+        cpt_gt_diff = Utils.inv(cpt_rel) @ gt_est.pose
+        rot_rmse = Utils.RMSe(Utils.matrix2mag(cpt_gt_diff)) * 180 / np.pi
+        trans_rmse = Utils.RMSe(Utils.trans_dist(cpt_gt_diff))
+        print('RMSE error (rot)', rot_rmse)
+        print('RMSE error (trans)', trans_rmse)
+
+        cpt_gt_avg_diff = Utils.inv(cpt_rel) @ gt_avg_est.pose
+        rot_avg_rmse = Utils.RMSe(Utils.matrix2mag(cpt_gt_avg_diff)) * 180 / np.pi
+        trans_avg_rmse = Utils.RMSe(Utils.trans_dist(cpt_gt_avg_diff))
+        print('RMSE error (rot) (avg opti)', rot_avg_rmse)
+        print('RMSE error (trans) (avg opti)', trans_avg_rmse)
+
+        cpt_gt_med_diff = Utils.inv(cpt_rel) @ gt_med_est.pose
+        rot_med_rmse = Utils.RMSe(Utils.matrix2mag(cpt_gt_med_diff)) * 180 / np.pi
+        trans_med_rmse = Utils.RMSe(Utils.trans_dist(cpt_gt_med_diff))
+        print('RMSE error (rot) (median opti)', rot_med_rmse)
+        print('RMSE error (trans) (median opti)', trans_med_rmse)
+
+        if outfile is not None:
+            outfile.write(f',{trans_rmse:.06},{rot_rmse:.06},{trans_avg_rmse:.06},{rot_avg_rmse:.06},{trans_med_rmse:.06},{rot_med_rmse:.06}')
 
         if True:
             plt.figure()
             # plt.scatter(imu.timestamp + offset, Utils.matrix2mag(imu.rel()), s=2, label='imu')
             plt.scatter(cpt.timestamp, Utils.matrix2mag(cpt_rel), s=2, label='rot color pose')
             plt.scatter(gt_est.timestamp, Utils.matrix2mag(gt_est.pose), s=2, label='rot est')
+            plt.scatter(gt_est.timestamp, Utils.matrix2mag(gt_avg_est.pose), s=2, label='rot (avg) est')
+            plt.scatter(gt_est.timestamp, Utils.matrix2mag(gt_med_est.pose), s=2, label='rot (med) est')
             plt.legend()
 
             plt.figure()
             plt.scatter(cpt.timestamp, Utils.trans_dist(cpt_rel), s=2, label='trans color pose')
             plt.scatter(gt_est.timestamp, Utils.trans_dist(gt_est.pose), s=2, label='trans est')
+            plt.scatter(gt_est.timestamp, Utils.trans_dist(gt_avg_est.pose), s=2, label='trans (avg) est')
+            plt.scatter(gt_est.timestamp, Utils.trans_dist(gt_med_est.pose), s=2, label='trans (med) est')
             plt.legend()
 
             plt.show()
@@ -523,48 +696,157 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None):
             plt.legend()
 
         cv2.destroyAllWindows()
+        if outfile is not None:
+            outfile.write('\n')
+            outfile.flush()
 
     # todo: drop gt_est to
 
 
+def write_log_title(outfile):
+    outfile.write(','.join([
+        'data_path',
+        'imu_drift_bias[I]',
+        'imu_drift_scale[I]',
+        'error_imu_drift_all[I]',
+        'error_imu_drift_fit[I]',
+        'error_imu_drift_test[I]',
+        'time_bias[I]',
+        'imu_scale[I]',
+        'error_time_bias_imu_scale_all[I]',
+        'error_time_bias_imu_scale_fit[I]',
+        'error_time_bias_imu_scale_test[I]',
+        'time_bias[II]',
+        'error_time_bias_all[II]',
+        'error_time_bias_fit[II]',
+        'error_time_bias_test[II]',
+        'trans RMSE',
+        'rot RMSE',
+        'trans (avg) RMSE',
+        'rot (avg) RMSE',
+        'trans (median) RMSE',
+        'rot (median) RMSE',
+    ]) + '\n')
+
+
 if __name__ == '__main__':
-    with np.printoptions(suppress=True, precision=3):
 
-        post_process(r'C:\Users\rsheinin\record\20211116-142717',
-        # post_process(r'\\mevolve-win\wbm-trial-01-60deg-noirnoise\for_Riki\20211118-105708',
-                     r'..\capture_tool\gt_raw\gHc_nelder-mead-from-scratch.pkl',
-                     True, r'..\capture_tool\gt_raw')
+    post_process(r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-134025', r'D:\mevolve\data\amr\from_inbal_for_correl\publish\gHc_nelder-mead-from-guess.pkl',
+                 doEval=True, doDump=False,
+                 evalDataPath=r'D:\mevolve\data\amr\from_inbal_for_correl\publish',
+                 outfile=None)
+    exit(0)
 
-        # # post_process(r'F:\AMR\record\20211114-151800',
-        # # post_process(r'F:\AMR\record\20211114-162227',
-        # post_process(r'F:\AMR\record\20211114-172436-p-good',
-        #              r'F:\AMR\calib-dc\calib-20211114-134246\gHc_nelder-mead-from-scratch.pkl',
-        #              True, r'D:\AMR\gtool\ClientSample\src\gt_raw')
 
-        # # # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-141653',
-        # # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-141343',
-        # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-140817',
-        # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-143359', # -31.849 diff
-        # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-144525',
-        # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-151303',
-        # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-150012',
-        #              r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
-        #              True, r'D:\mevolve\data\amr\record\gt_raw')
+    input_list = [
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-105350',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-105708',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-113728',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-114235',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-114622',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-115006',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-115242',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-115544',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-130026',
+        # r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-130505',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-130623',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-131002',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-131249',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-131553',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-132008',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-132425',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-132825',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-133313',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-133736',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-134025',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-134258',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-134514',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-134755',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-135013',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-135239',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-135510',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-135730',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-135943',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-145501',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-145748',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-150233',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-150504',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-150753',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-151400',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-151916',
+        r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-152159'
+    ]
 
-        # post_process(r'F:\AMR\record\20211109-154840',
-        #              r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
-        #              r'D:\AMR\gtool\ClientSample\src\gt_raw')
-        #
-        # # post_process(r'C:\Users\ntuser\record\20211109-142305',
-        # #              r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
-        # #              r'D:\AMR\gtool\ClientSample\src\gt_raw')
-        # #
-        # # # post_process(r'C:\Users\ntuser\record\20211109-141224',
-        # # #              r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
-        # # #              r'D:\AMR\gtool\ClientSample\src\gt_raw')
-        # # #
-        # # # # post_process(
-        # # # #     r'D:\mevolve\data\amr\record\omer_time_calib_type_1\20211109-111409',
-        # # # #     r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
-        # # # #     True, r'D:\mevolve\data\amr\record\gt_raw'
-        # # # # )
+    I = 'old'
+    II = 'old'
+    filter = 'no'
+    # with open(f'I-{I}_II-{II}_{filter}Filter.csv', 'a') as ofile:
+    with open(f'I-{I}_II-{II}_{filter}Filter.csv', 'w') as ofile:
+        write_log_title(ofile)
+        # for f in [r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-151916']:
+        for i, f in enumerate(input_list):
+            print('---------->', i)
+            try:
+                post_process(f, r'D:\mevolve\data\amr\from_inbal_for_correl\publish\gHc_nelder-mead-from-guess.pkl',
+                         doEval=True, doDump=False,
+                         evalDataPath=r'D:\mevolve\data\amr\from_inbal_for_correl\publish',
+                         outfile=ofile)
+            except:
+                ofile.write('~~~~~~~~ error~~~~~~~~~~\n')
+            print('=========>', i)
+
+
+
+    # with np.printoptions(suppress=True, precision=3):
+    #
+    #     # # post_process(r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-130623',
+    #     # post_process(r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-132825',
+    #     post_process(r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-151916',
+    #                  r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
+    #                  True, r'D:\mevolve\data\amr\record\gt_raw')
+    #
+    #
+    #     # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-150012',
+    #     #              r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
+    #     #              True, r'D:\mevolve\data\amr\record\gt_raw')
+    #
+    #
+    #     # post_process(r'C:\Users\rsheinin\record\20211116-142717',
+    #     # # post_process(r'\\mevolve-win\wbm-trial-01-60deg-noirnoise\for_Riki\20211118-105708',
+    #     #              r'..\capture_tool\gt_raw\gHc_nelder-mead-from-scratch.pkl',
+    #     #              True, r'..\capture_tool\gt_raw')
+    #
+    #
+    #     # # post_process(r'F:\AMR\record\20211114-151800',
+    #     # # post_process(r'F:\AMR\record\20211114-162227',
+    #     # post_process(r'F:\AMR\record\20211114-172436-p-good',
+    #     #              r'F:\AMR\calib-dc\calib-20211114-134246\gHc_nelder-mead-from-scratch.pkl',
+    #     #              True, r'D:\AMR\gtool\ClientSample\src\gt_raw')
+    #
+    #     # # # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-141653',
+    #     # # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-141343',
+    #     # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-140817',
+    #     # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-143359', # -31.849 diff
+    #     # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-144525',
+    #     # # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-151303',
+    #     # post_process(r'D:\mevolve\data\amr\record\time_calib\20211111-150012',
+    #     #              r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
+    #     #              True, r'D:\mevolve\data\amr\record\gt_raw')
+    #
+    #     # post_process(r'F:\AMR\record\20211109-154840',
+    #     #              r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
+    #     #              r'D:\AMR\gtool\ClientSample\src\gt_raw')
+    #     #
+    #     # # post_process(r'C:\Users\ntuser\record\20211109-142305',
+    #     # #              r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
+    #     # #              r'D:\AMR\gtool\ClientSample\src\gt_raw')
+    #     # #
+    #     # # # post_process(r'C:\Users\ntuser\record\20211109-141224',
+    #     # # #              r'D:\AMR\gtool\ClientSample\src\gt_raw\ghc_opt2021-11-03-03-10-42.pkl', True,
+    #     # # #              r'D:\AMR\gtool\ClientSample\src\gt_raw')
+    #     # # #
+    #     # # # # post_process(
+    #     # # # #     r'D:\mevolve\data\amr\record\omer_time_calib_type_1\20211109-111409',
+    #     # # # #     r'D:\mevolve\data\amr\calib-dc\ghc_opt2021-11-03-03-10-42.pkl',
+    #     # # # #     True, r'D:\mevolve\data\amr\record\gt_raw'
+    #     # # # # )

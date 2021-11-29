@@ -14,9 +14,7 @@ import cv2
 
 import threading
 
-
-
-from common.capture_post_process import post_process, post_process_S, post_process_M
+from common.capture_post_process import post_process, write_log_title,  post_process_S, post_process_M
 from common.Utils import OptitrackClient
 
 print(post_process_S, post_process_M)
@@ -242,7 +240,7 @@ class WorkerZICC(threading.Thread):
 #     PHASE_STAT_II = 3
 #     PHASE_RECORD_MOVE = 4
 
-__VERSION__ = '1.0.6.1'
+__VERSION__ = '1.0.6.2'
 if __name__ == '__main__':
     print(f"Capture tool version {__VERSION__}")
     parser = argparse.ArgumentParser()
@@ -261,10 +259,16 @@ if __name__ == '__main__':
     DISP_MAX_DIST = 3
 
 
+    postprocess_csv = None
     optiClient = None
     if args.opti:
         optiClient = OptitrackClient()
         optiClient.rb_init()
+
+        postprocess_csv = os.path.abspath(f'{base_output_folder}_{datetime.now().strftime("%Y%m%d-%H%M%S")}.csv')
+
+        with open(postprocess_csv, 'w') as outfile:
+            write_log_title(outfile)
 
     imCapture = WorkerZICC()
     imCapture.start()
@@ -408,11 +412,14 @@ if __name__ == '__main__':
 
                     optiClient.rb_init()
 
-                    with np.printoptions(suppress=True, precision=3):
+                    # with np.printoptions(suppress=True, precision=3):
+                    with open(postprocess_csv, 'a') as outfile:
                         post_process(output_folder,
                                      ghc_path,
-                                     True,
-                                     gt_raw)
+                                     doEval=True,
+                                     doDump=False,
+                                     evalDataPath=gt_raw,
+                                     outfile=outfile)
 
         elif k == 27:
             break
