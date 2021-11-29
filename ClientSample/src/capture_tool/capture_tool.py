@@ -240,7 +240,15 @@ class WorkerZICC(threading.Thread):
 #     PHASE_STAT_II = 3
 #     PHASE_RECORD_MOVE = 4
 
-__VERSION__ = '1.0.6.2'
+__VERSION__ = '1.0.6.3'
+description = [
+    'opti',
+    'post process'
+    'imu gyro'
+    'remove opti > 0.001'
+    'filter opti average'
+]
+
 if __name__ == '__main__':
     print(f"Capture tool version {__VERSION__}")
     parser = argparse.ArgumentParser()

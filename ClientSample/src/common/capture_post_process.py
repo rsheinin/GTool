@@ -23,6 +23,9 @@ from common.Utils import Utils, ImageChessboardPose
 post_process_S, post_process_M = 300, 600
 p1_sec, p2_sec, p3_sec = 3.5, 7.5, 5
 
+debug_plot = True
+sum_plot = True
+
 
 class DataReader:
     def __init__(self, capture_folder, keys=['ts', 'color', 'accel', 'accel_ts', 'gyro', 'gyro_ts']):
@@ -98,7 +101,7 @@ class OptiReader:
 
     def filter(self, df):
         t_error = 0.1
-        # t_error = 0.001
+        t_error = 0.001
         markers_in_scence_col_idx = 22
         markers_in_scence_col = df.columns[markers_in_scence_col_idx]
         markers_col = df.columns[markers_in_scence_col_idx - 1]
@@ -221,7 +224,7 @@ def find_static_phase(t, d, interval_sec=0.5, seq_min_sec_len=0.5, d_ker=3):
     stat_mask_a_based = np.abs(a_filter) < a_thresh
     ta_stat_delta = t_with_delta_for_a[stat_mask_a_based]
     ta_map_stat = np.cumsum(1 - (ta_stat_delta[1:] - ta_stat_delta[:-1] < (seq_min_sec_len * sec2msec)))
-    if False:
+    if debug_plot:
         a_stat_delta = a[stat_mask_a_based]
         plt.figure()
         plt.scatter(t_with_delta_for_a, a, s=2, label='a')
@@ -243,7 +246,7 @@ def find_static_phase(t, d, interval_sec=0.5, seq_min_sec_len=0.5, d_ker=3):
 
     ret = [(s, e) for s, e in zip(start[m], end[m])]
 
-    if False:
+    if debug_plot:
         plt.figure()
         plt.scatter(t, d, s=2, label='d')
         for i, (s, e) in enumerate(ret):
@@ -402,7 +405,7 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, stat_ts):
             new_t2 = t2_ + time_bias
             new_d1 = new_d1 * mag_scale + y_bias
 
-    if False:
+    if debug_plot:
         plt.figure()
         plt.scatter(t1_, d1_, s=2, label='imu')
         plt.scatter(t1_, new_d1, s=2, label='imu fix')
@@ -421,7 +424,7 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, stat_ts):
     # t1_mask = (t1_ > stat_ts[1][1])
     # t2_mask = (t2_ > stat_ts[1][1])
     # print('time sync phase 1 res = ', res.x, ', error test = ', imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
-    return (t1_, new_d1, new_t2, d2_), res_out
+    return (t1_, new_d1, new_t2, d2_), (res_out, time_bias)
     return t1_ + ts1[0] - init_diff, new_d1, new_t2 + ts1[0] - init_diff, d2_
 
 
@@ -525,7 +528,7 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
 
     new_t2 = t2_[0] + (t2_ - t2_[0]) * time_scale + time_bias
 
-    if False:
+    if debug_plot:
         plt.figure()
         plt.scatter(t1_, d1_, s=2, label='imu fix')
         plt.scatter(new_t2, d2_, s=2, label='opti')
@@ -535,7 +538,7 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
     # print('time sync phase 2 res = ', res.x, ', fit error = ',
     #       func(res.x, t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]))
     # print('time sync phase 2 res = ', res.x, ', all error = ', func(res.x, t1_, t2_, d1_, d2_))
-    return (t1_, d1_, new_t2, d2_), res_out
+    return (t1_, d1_, new_t2, d2_), (res_out, time_bias)
 
 
 def time_sync(ts1, traj1, ts2, traj2, init_diff=1000, interval_sec=10, velocity_mm_per_ms=0.014, seq_sec=15):
@@ -551,11 +554,14 @@ def time_sync(ts1, traj1, ts2, traj2, init_diff=1000, interval_sec=10, velocity_
         print('could not found static phase > 2.5 sec')
         return None, None, None
 
-    (t1__, d1__, t2__, d2__), res_out_1 = sync_time_phase1(t1_, d1_, t2_, d2_, d2_stat)
-    (t1___, d1___, t2___, d2___), res_out_2 = sync_time_phase2(t1__ - offset, d1__, t2__ - offset, d2__,
+
+    (t1__, d1__, t2__, d2__), (res_out_1, time_bias_1) = sync_time_phase1(t1_, d1_, t2_, d2_, d2_stat)
+    (t1___, d1___, t2___, d2___), (res_out_2, time_bias_2) = sync_time_phase2(t1__ - offset, d1__, t2__ - offset, d2__,
                                                   d2_stat - offset, interval_sec, velocity_mm_per_ms, seq_sec)
 
-    return t2___, d2_stat - offset, res_out_1 + res_out_2
+    time_bias = time_bias_2 + time_bias_1
+    print('total time bias', time_bias)
+    return t2___, d2_stat - offset, res_out_1 + res_out_2 + [time_bias]
 
 
 def debug_data(data):
@@ -577,6 +583,8 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
 
     opti_data = OptiReader(osp.join(capture_folder, 'opti_pose_list.csv'))
     opti = Trajectory(opti_data.ts.copy(), opti_data.pose.copy())
+
+    Utils.inv(opti.interpolate(opti.timestamp + 500, True).pose) @ opti.pose
 
     new_opti_ts, stat, res_out = time_sync(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
     if new_opti_ts is None:
@@ -619,14 +627,18 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
         im_pose = ImageChessboardPose()
         im_pose.init_from_folder(evalDataPath)
 
-        # # color_pose = [im_pose.get_pose(c.copy(), show=True, draw_coord=True)[0] for c in data.color]
-        # # color_pose = np.asarray([Utils.inv(p) if p is not None else np.eye(4) * np.nan for p in color_pose])
-        # with Pool(10) as p:
-        #     color_pose = p.starmap(im_pose.get_pose, tqdm.tqdm([(c,) for c in data.color]))
-        color_pose = []
-        for c in tqdm.tqdm(data.color):
-            color_pose += [im_pose.get_pose(c)]
-        color_pose = np.asarray([Utils.inv(p[0]) if p[0]is not None else np.eye(4) * np.nan for p in color_pose])
+        if False:
+                color_pose = [im_pose.get_pose(c.copy(), show=True, draw_coord=True)[0] for c in data.color]
+                color_pose = np.asarray([Utils.inv(p) if p is not None else np.eye(4) * np.nan for p in color_pose])
+        else:
+            if False:
+                with Pool(10) as p:
+                    color_pose = p.starmap(im_pose.get_pose, tqdm.tqdm([(c,) for c in data.color]))
+            else:
+                color_pose = []
+                for c in tqdm.tqdm(data.color):
+                    color_pose += [im_pose.get_pose(c)]
+            color_pose = np.asarray([Utils.inv(p[0]) if p[0] is not None else np.eye(4) * np.nan for p in color_pose])
 
         cpt_orig_mask = (data.ts > stat[1][0] + 200) & (data.ts < stat[1][1] - 200)
         cpt_orig_mat = Utils.average_transformation(color_pose[cpt_orig_mask])
@@ -654,7 +666,7 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
         if outfile is not None:
             outfile.write(f',{trans_rmse:.06},{rot_rmse:.06},{trans_avg_rmse:.06},{rot_avg_rmse:.06},{trans_med_rmse:.06},{rot_med_rmse:.06}')
 
-        if True:
+        if sum_plot:
             plt.figure()
             # plt.scatter(imu.timestamp + offset, Utils.matrix2mag(imu.rel()), s=2, label='imu')
             plt.scatter(cpt.timestamp, Utils.matrix2mag(cpt_rel), s=2, label='rot color pose')
@@ -720,6 +732,7 @@ def write_log_title(outfile):
         'error_time_bias_all[II]',
         'error_time_bias_fit[II]',
         'error_time_bias_test[II]',
+        'total_time_bias',
         'trans RMSE',
         'rot RMSE',
         'trans (avg) RMSE',
@@ -729,11 +742,33 @@ def write_log_title(outfile):
     ]) + '\n')
 
 
+from glob import glob
 if __name__ == '__main__':
+    outfile = r'\\optitrack.ger.corp.intel.com\GTService\25.11.21\20211125__old_ta__ag.csv'
+    input_list = glob(r'\\optitrack.ger.corp.intel.com\GTService\25.11.21\20211125-*')
 
-    post_process(r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-134025', r'D:\mevolve\data\amr\from_inbal_for_correl\publish\gHc_nelder-mead-from-guess.pkl',
+    with open(outfile, 'w') as ofile:
+        write_log_title(ofile)
+        # for f in [r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-151916']:
+        for i, f in enumerate(input_list):
+            print('---------->', i)
+            try:
+                post_process(f,
+                             r'\\optitrack.ger.corp.intel.com\GTService\25.11.21\calib-20211125-101528\gHc_nelder-mead-from-guess.pkl',
+                             doEval=True, doDump=False,
+                             evalDataPath=r'\\optitrack.ger.corp.intel.com\GTService\25.11.21\calib-20211125-101528',
+                             outfile=ofile)
+            except:
+                ofile.write('~~~~~~~~ error~~~~~~~~~~\n')
+            print('=========>', i)
+
+
+    exit(0)
+
+    post_process(r'\\optitrack.ger.corp.intel.com\GTService\25.11.21\20211125-103334',
+                 r'\\optitrack.ger.corp.intel.com\GTService\25.11.21\calib-20211125-101528\gHc_nelder-mead-from-guess.pkl',
                  doEval=True, doDump=False,
-                 evalDataPath=r'D:\mevolve\data\amr\from_inbal_for_correl\publish',
+                 evalDataPath=r'\\optitrack.ger.corp.intel.com\GTService\25.11.21\calib-20211125-101528',
                  outfile=None)
     exit(0)
 
