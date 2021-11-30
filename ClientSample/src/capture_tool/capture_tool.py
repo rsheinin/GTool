@@ -240,13 +240,14 @@ class WorkerZICC(threading.Thread):
 #     PHASE_STAT_II = 3
 #     PHASE_RECORD_MOVE = 4
 
-__VERSION__ = '1.0.6.3'
+__VERSION__ = '1.0.6.4'
 description = [
     'opti',
     'post process'
     'imu gyro'
     'remove opti > 0.001'
     'filter opti average'
+    'ta based rel rotation 50'
 ]
 
 if __name__ == '__main__':

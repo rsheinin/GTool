@@ -132,9 +132,14 @@ class Trajectory:
 
     def interpolate(self, ts, doTrnasInterp=True):
         slerp = Slerp(self.timestamp, R.from_matrix(self.pose[:, :3, :3]))
-        valid_ts = ts[(ts > self.timestamp.min()) & (ts < self.timestamp.max())]
+        valid_mask = (ts > self.timestamp.min()) & (ts < self.timestamp.max())
+        valid_ts = ts[valid_mask]
         interp_r = slerp(valid_ts)
         interp_rotmat = interp_r.as_matrix()
+
+        new_pose = np.tile(np.eye(4), (len(ts), 1, 1))
+        new_pose[~valid_mask, ...] = np.nan
+        new_pose[valid_mask, :3, :3] = interp_rotmat
 
         if doTrnasInterp:
             ### todo: interpolate.interp3d(self.ts)
@@ -143,16 +148,25 @@ class Trajectory:
             interp_tz = interpolate.interp1d(self.timestamp, self.pose[:, 2, 3])
 
             interp_t = np.column_stack([interp_tx(valid_ts), interp_ty(valid_ts), interp_tz(valid_ts)])
+            new_pose[valid_mask, :3, 3] = interp_t
+            return Trajectory(ts, new_pose)
 
             return Trajectory(valid_ts, Utils.homogeneous_nd(interp_rotmat, interp_t))
 
+        return Trajectory(ts, new_pose[..., :3, :3])
         return Trajectory(valid_ts, interp_rotmat)
 
 
-def calc_imu_rotation(accel_ts, accel, gyro_ts, gyro):
+def calc_imu_rotation(accel_ts_, accel_, gyro_ts_, gyro_):
+    gyro_mask = gyro_ts_[1:] != gyro_ts_[:-1]
+    gyro_ts = gyro_ts_[:-1][gyro_mask]
+    gyro = gyro_[:-1][gyro_mask]
     gyro_sec_diff = np.diff(np.asarray(gyro_ts)) / 1000
     gyro_euler = (np.asarray(gyro)[1:] * gyro_sec_diff[..., None])
 
+    accel_mask = accel_ts_[1:] != accel_ts_[:-1]
+    accel_ts = accel_ts_[:-1][accel_mask]
+    accel = accel_[:-1][accel_mask]
     z = np.arctan2(accel[:, 1], accel[:, 2])
     x = np.arctan2(accel[:, 0], (accel[:, 1] ** 2 + accel[:, 2] ** 2) ** 0.5)
     accel_euler = np.asarray([_ for _ in zip(x, itertools.repeat(0), z)])
@@ -224,7 +238,7 @@ def find_static_phase(t, d, interval_sec=0.5, seq_min_sec_len=0.5, d_ker=3):
     stat_mask_a_based = np.abs(a_filter) < a_thresh
     ta_stat_delta = t_with_delta_for_a[stat_mask_a_based]
     ta_map_stat = np.cumsum(1 - (ta_stat_delta[1:] - ta_stat_delta[:-1] < (seq_min_sec_len * sec2msec)))
-    if debug_plot:
+    if False:
         a_stat_delta = a[stat_mask_a_based]
         plt.figure()
         plt.scatter(t_with_delta_for_a, a, s=2, label='a')
@@ -307,8 +321,10 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, stat_ts):
     d1_, d2_ = data1d1, data1d2
 
     if True:
-        t1_mask = (t1_ > stat_ts[0][0]) & (t1_ < stat_ts[1][1])
-        t2_mask = (t2_ > stat_ts[0][0]) & (t2_ < stat_ts[1][1])
+        valid_1 = (~np.isnan(d1_))
+        valid_2 = (~np.isnan(d2_))
+        t1_mask = (t1_ > stat_ts[0][0]) & (t1_ < stat_ts[1][1]) & (valid_1)
+        t2_mask = (t2_ > stat_ts[0][0]) & (t2_ < stat_ts[1][1]) & (valid_2)
 
         res = minimize(imu_drift_loss, [0, 1, 0, 1],
                        (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
@@ -320,7 +336,7 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, stat_ts):
 
         res_out = [drift_bias, drift_scale, np.nan, np.nan, np.nan, time_bias, mag_scale]
 
-        tmp = imu_drift_loss(res.x, t1_, t2_, d1_, d2_)
+        tmp = imu_drift_loss(res.x, t1_[valid_1], t2_[valid_2], d1_[valid_1], d2_[valid_2])
         print('imu_drift_loss res = ', res.x, ', error all = ', tmp)
         res_out += [tmp]
 
@@ -328,8 +344,8 @@ def sync_time_phase1(ts1, data1d1, ts2, data1d2, stat_ts):
         print('imu_drift_loss res = ', res.x, ', error fit = ', tmp)
         res_out += [tmp]
 
-        t1_mask = (t1_ > stat_ts[1][1] + 1000)
-        t2_mask = (t2_ > stat_ts[1][1] + 1000)
+        t1_mask = (t1_ > stat_ts[1][1] + 1000) & valid_1
+        t2_mask = (t2_ > stat_ts[1][1] + 1000) & valid_2
         tmp = imu_drift_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
         print('imu_drift_loss res = ', res.x, ', error test = ', tmp)
         res_out += [tmp]
@@ -448,7 +464,7 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
     # time bias
     def time_bias_loss(x, t1, t2, d1, d2):
 
-        time_bias, = x
+        time_bias, scale = x
 
         # new_t2 = t2 * time_scale + time_bias
         new_t2 = t2[0] + (t2 - t2[0]) * 1 + time_bias
@@ -456,16 +472,22 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
         mask = (t1 > new_t2[0]) & (t1 < new_t2[-1])
         interp = interpolate.interp1d(new_t2, d2)(t1[mask])
 
-        return np.abs(d1[mask] - interp).mean()
+        return np.abs(d1[mask] * scale - interp).mean()
         return Utils.RMSe(d1[mask] - interp)
         return np.linalg.norm(d1[mask] - interp)
 
     d1_, d2_ = data1d1, data1d2
     t1_, t2_ = ts1, ts2
 
+    valid_1 = (~np.isnan(d1_))
+    valid_2 = (~np.isnan(d2_))
 
-    t1_mask = (t1_ > stat_ts[0][1]) & (t1_ < stat_ts[1][0])
-    t2_mask = (t2_ > stat_ts[0][1]) & (t2_ < stat_ts[1][0])
+    if False:
+        t1_mask = (t1_ > stat_ts[0][1]) & (t1_ < stat_ts[0][1] + 1000) & (valid_1)
+        t2_mask = (t2_ > stat_ts[0][1]) & (t2_ < stat_ts[0][1] + 1000) & (valid_2)
+    else:
+        t1_mask = (t1_ > stat_ts[0][1]) & (t1_ < stat_ts[1][0]) & (valid_1)
+        t2_mask = (t2_ > stat_ts[0][1]) & (t2_ < stat_ts[1][0]) & (valid_2)
 
 
 
@@ -473,26 +495,18 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
         res = minimize(time_scale_and_bias_loss, [0, 1],
                        (t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]), method='Nelder-Mead')
         time_bias, time_scale = res.x
-        func = time_scale_and_bias_loss
+
     elif True:
-        # # res = minimize(time_bias_loss, [0], (t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]),
-        # #                method='Nelder-Mead')
-        # res = minimize(time_bias_loss, [0], (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
-        #                method='Nelder-Mead')
-        # res = minimize(time_bias_loss, [0], (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
-        #                method='L-BFGS-B')
-        # res = minimize(time_bias_loss, [0], (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
-        #                method='Nelder-Mead', bounds=[(-60, 100)])
-        res = minimize(time_bias_loss, [0], (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
+        res = minimize(time_bias_loss, [0, 1], (t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]),
                         method='Nelder-Mead')
 
-        time_bias, = res.x
+        time_bias, _ = res.x
         time_scale = 1
-        func = time_bias_loss
 
         res_out = [*res.x]
+        res_out = [time_bias]
 
-        tmp = time_bias_loss(res.x, t1_, t2_, d1_, d2_)
+        tmp = time_bias_loss(res.x, t1_[valid_1], t2_[valid_2], d1_[valid_1], d2_[valid_2])
         print('time_bias_loss res = ', res.x, ', error all = ', tmp)
         res_out += [tmp]
 
@@ -500,8 +514,8 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
         print('time_bias_loss res = ', res.x, ', error fit = ', tmp)
         res_out += [tmp]
 
-        t1_mask = (t1_ > stat_ts[1][1] + 1000)
-        t2_mask = (t2_ > stat_ts[1][1] + 1000)
+        t1_mask = (t1_ > stat_ts[1][1] + 1000) & valid_1
+        t2_mask = (t2_ > stat_ts[1][1] + 1000) & valid_2
         tmp = time_bias_loss(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask])
         print('time_bias_loss res = ', res.x, ', error test = ', tmp)
         res_out += [tmp]
@@ -584,15 +598,21 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     opti_data = OptiReader(osp.join(capture_folder, 'opti_pose_list.csv'))
     opti = Trajectory(opti_data.ts.copy(), opti_data.pose.copy())
 
-    # Utils.inv(opti.interpolate(opti.timestamp + 500, True).pose) @ opti.pose
+    opti_rel_500 = Utils.inv(opti.interpolate(opti.timestamp + 500, True).pose) @ opti.pose
+    imu_rel_500 = Utils.inv(imu.interpolate(imu.timestamp + 500, False).pose) @ imu.pose
 
-    new_opti_ts, stat, res_out = time_sync(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
+    new_opti_ts, stat, res_out = time_sync(imu.timestamp, imu_rel_500, opti.timestamp, opti_rel_500)
+    # new_opti_ts, stat, res_out = time_sync(data.ts[len(data.ts)-len(imu_rel_500):], imu_rel_500, opti.timestamp, opti_rel_500)
+
+
+    # new_opti_ts, stat, res_out = time_sync(imu.timestamp, imu.rel(), opti.timestamp, opti.rel())
     if new_opti_ts is None:
         return
 
     ghc = Utils.load_pkl(ghc_path)
-    offset = 0
     offset = 1000 / 30
+    offset = imu.timestamp[0] - data.ts[0]
+    offset = 0
 
 
 
@@ -665,6 +685,17 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
 
         if outfile is not None:
             outfile.write(f',{trans_rmse:.06},{rot_rmse:.06},{trans_avg_rmse:.06},{rot_avg_rmse:.06},{trans_med_rmse:.06},{rot_med_rmse:.06}')
+
+        if True:
+            cpt_rel_500 = Utils.inv(cpt.interpolate(cpt.timestamp + 500).pose) @ cpt.pose
+            gt_rel_500 = Utils.inv(gt_avg_est.interpolate(gt_avg_est.timestamp + 500).pose) @ gt_est.pose
+
+            plt.figure()
+            plt.plot(cpt.timestamp, Utils.matrix2mag(cpt_rel_500), marker='o', label='cpt rel rot', markersize=2)
+            plt.plot(imu.timestamp, Utils.matrix2mag(imu_rel_500), marker='o', label='imu rel rot', markersize=2)
+            plt.plot(gt_est.timestamp, Utils.matrix2mag(gt_rel_500), marker='o', label='gt rel rot', markersize=2)
+            plt.legend()
+            plt.show()
 
         if sum_plot:
             plt.figure()
