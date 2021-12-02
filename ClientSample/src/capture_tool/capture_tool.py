@@ -240,14 +240,15 @@ class WorkerZICC(threading.Thread):
 #     PHASE_STAT_II = 3
 #     PHASE_RECORD_MOVE = 4
 
-__VERSION__ = '1.0.6.4'
+__VERSION__ = '1.0.6.5'
 description = [
     'opti',
-    'post process'
-    'imu gyro'
-    'remove opti > 0.001'
-    'filter opti average'
-    'ta based rel rotation 50'
+    'post process',
+    'imu gyro',
+    'remove opti > 0.001',
+    'filter opti average',
+    'ta based rel rotation 50',
+    'workaround for imu bias'
 ]
 
 if __name__ == '__main__':
@@ -266,7 +267,6 @@ if __name__ == '__main__':
     base_output_folder = args.output_folder
     output_folder = None
     DISP_MAX_DIST = 3
-
 
     postprocess_csv = None
     optiClient = None

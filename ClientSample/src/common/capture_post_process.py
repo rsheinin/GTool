@@ -23,7 +23,7 @@ from common.Utils import Utils, ImageChessboardPose
 post_process_S, post_process_M = 300, 600
 p1_sec, p2_sec, p3_sec = 3.5, 7.5, 5
 
-debug_plot = True
+debug_plot = False
 sum_plot = True
 
 
@@ -587,6 +587,16 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     print('start post process on', capture_folder)
 
     data = DataReader(capture_folder)
+    if False:
+        data.gyro_ts = data.gyro_ts - data.gyro_ts[0] + data.ts[0]
+        data.accel_ts = data.accel_ts - data.gyro_ts[0] + data.ts[0]
+    elif False:
+        data.gyro_ts = data.gyro_ts + 100
+        data.accel_ts = data.accel_ts + 100
+    elif True:
+        print('!!!!!!!!!!!!', (data.accel_ts - data.ts).mean())
+        data.gyro_ts = data.gyro_ts + 100 + (data.accel_ts - data.ts).mean()
+        data.accel_ts = data.accel_ts + 100 + (data.accel_ts - data.ts).mean()
 
     # debug_data(data)
 
@@ -614,8 +624,6 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     offset = imu.timestamp[0] - data.ts[0]
     offset = 0
 
-
-
     data_ts_mask = data.ts > (stat[1][1] - 1000)
     opti_orig_mask = (new_opti_ts > stat[1][0] + 200) & (new_opti_ts < stat[1][1] - 200)
     opti_orig_mat = Utils.average_transformation(opti_data.pose[opti_orig_mask])
@@ -623,7 +631,6 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
     gt_avg_est = Trajectory(new_opti_ts + offset, opti_data.avg_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
     gt_med_est = Trajectory(new_opti_ts + offset, opti_data.med_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
-
 
     if outfile is not None:
         outfile.write(','.join([capture_folder] + [f'{s:.06}' for s in res_out]))
@@ -686,7 +693,7 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
         if outfile is not None:
             outfile.write(f',{trans_rmse:.06},{rot_rmse:.06},{trans_avg_rmse:.06},{rot_avg_rmse:.06},{trans_med_rmse:.06},{rot_med_rmse:.06}')
 
-        if True:
+        if False:
             cpt_rel_500 = Utils.inv(cpt.interpolate(cpt.timestamp + 500).pose) @ cpt.pose
             gt_rel_500 = Utils.inv(gt_avg_est.interpolate(gt_avg_est.timestamp + 500).pose) @ gt_est.pose
 
