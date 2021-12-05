@@ -593,10 +593,11 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     elif False:
         data.gyro_ts = data.gyro_ts + 100
         data.accel_ts = data.accel_ts + 100
-    elif True:
-        print('!!!!!!!!!!!!', (data.accel_ts - data.ts).mean())
+    elif False:
         data.gyro_ts = data.gyro_ts + 100 + (data.accel_ts - data.ts).mean()
         data.accel_ts = data.accel_ts + 100 + (data.accel_ts - data.ts).mean()
+
+    print('!!!!!!!!!!!!', (data.accel_ts - data.ts).mean())
 
     # debug_data(data)
 
@@ -639,12 +640,12 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
         gt_out = 'gt'
         os.makedirs(os.path.join(data.folder, gt_out), exist_ok=True)
         #todo: avg, med...........
-        for pkl_path, gt_ts, gt_pose in zip(np.asarray(data.pkls)[data_ts_mask], gt_est.timestamp, gt_est.pose):
+        for pkl_path, gt_ts, gt_pose in zip(np.asarray(data.pkls)[data_ts_mask], gt_est.timestamp, gt_avg_est.pose):
             pkl = Utils.load_pkl(pkl_path)
-            if pkl['ts'] == gt_ts: # if all goes good should be always true
+            if pkl['ts'] == gt_ts:  # if all goes good should be always true
                 pkl['gt_pose'] = gt_pose.copy()
                 pkl['gt_pose'][..., :3, 3] *= 0.001
-                # print(gt_ts, pkl['gt_pose'][..., :3, 3])
+
                 Utils.save_pkl((lambda x: os.path.join(x[0], gt_out, x[1]))(os.path.split(pkl_path)), pkl)
             else:
                 print('****** error', pkl_path, pkl['ts'], gt_ts)

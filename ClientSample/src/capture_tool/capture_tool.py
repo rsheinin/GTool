@@ -117,6 +117,18 @@ class WorkerZICC(threading.Thread):
         depth_sensor = profile.get_device().first_depth_sensor()
         self.depth_scale = depth_sensor.get_depth_scale()
 
+        depth_profile = profile.get_stream(rs.stream.depth)
+        color_profile = profile.get_stream(rs.stream.color)
+
+        color2depth = color_profile.get_extrinsics_to(depth_profile)
+
+        extrn = np.eye(4)
+        extrn[:3, :3] = np.asarray(color2depth.rotation).reshape((3, 3))
+        extrn[:3, 3] = np.asarray(color2depth.translation)
+        self.color_depth_extrn = extrn
+
+
+
         align_to = rs.stream.depth
 
         intr = profile.get_stream(rs.stream.depth).as_video_stream_profile().get_intrinsics()
@@ -132,6 +144,7 @@ class WorkerZICC(threading.Thread):
         self.depth_scale = None
         self.align = None
         self.cam_k = None
+        self.color_depth_extrn = None
         self.save_stream = False
         self.ts_prev = 0
 
@@ -199,7 +212,9 @@ class WorkerZICC(threading.Thread):
             ir_im = (ir_im >> 8).astype(np.uint8)
 
         data = {'depth': depth_im, 'depth_scale': self.depth_scale, 'ir': ir_im, 'color': color_im,
-                'cam_k': self.cam_k, 'ts': ts, 'dt': dt,
+                'cam_k': self.cam_k,
+                'c2d_p': self.color_depth_extrn,
+                'ts': ts, 'dt': dt,
                 # 'accel': accel,
                 'gyro': gyro,
                 'gyro_ts': gyro_ts,
