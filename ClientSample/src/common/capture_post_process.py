@@ -520,6 +520,8 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
         print('time_bias_loss res = ', res.x, ', error test = ', tmp)
         res_out += [tmp]
 
+        score = tmp
+
         # print('time sync phase 2 res = ', res.x, ', all error = ', func(res.x, t1_, t2_, d1_, d2_))
         # print('time sync phase 2 res = ', res.x, ', fit error = ', func(res.x, t1_[t1_mask], t2_[t2_mask], d1_[t1_mask], d2_[t2_mask]))
         # t1_mask = (t1_ > stat_ts[1][1])
@@ -552,7 +554,7 @@ def sync_time_phase2(ts1, data1d1, ts2, data1d2, stat_ts, interval_sec=10, veloc
     # print('time sync phase 2 res = ', res.x, ', fit error = ',
     #       func(res.x, t1_[start1:end1], t2_[start2:end2], d1_[start1:end1], d2_[start2:end2]))
     # print('time sync phase 2 res = ', res.x, ', all error = ', func(res.x, t1_, t2_, d1_, d2_))
-    return (t1_, d1_, new_t2, d2_), (res_out, time_bias)
+    return (t1_, d1_, new_t2, d2_), (res_out, time_bias, score)
 
 
 def time_sync(ts1, traj1, ts2, traj2, init_diff=1000, interval_sec=10, velocity_mm_per_ms=0.014, seq_sec=15):
@@ -570,12 +572,12 @@ def time_sync(ts1, traj1, ts2, traj2, init_diff=1000, interval_sec=10, velocity_
 
 
     (t1__, d1__, t2__, d2__), (res_out_1, time_bias_1) = sync_time_phase1(t1_, d1_, t2_, d2_, d2_stat)
-    (t1___, d1___, t2___, d2___), (res_out_2, time_bias_2) = sync_time_phase2(t1__ - offset, d1__, t2__ - offset, d2__,
+    (t1___, d1___, t2___, d2___), (res_out_2, time_bias_2, ta_score) = sync_time_phase2(t1__ - offset, d1__, t2__ - offset, d2__,
                                                   d2_stat - offset, interval_sec, velocity_mm_per_ms, seq_sec)
 
     time_bias = time_bias_2 + time_bias_1
     print('total time bias', time_bias)
-    return t2___, d2_stat - offset, res_out_1 + res_out_2 + [time_bias]
+    return t2___, d2_stat - offset, (res_out_1 + res_out_2 + [time_bias], ta_score, time_bias)
 
 
 def debug_data(data):
@@ -587,6 +589,9 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     print('start post process on', capture_folder)
 
     data = DataReader(capture_folder)
+    imu_ts_diff = (data.accel_ts - data.ts).mean()
+    print('imu ts diff', imu_ts_diff)
+
     if False:
         data.gyro_ts = data.gyro_ts - data.gyro_ts[0] + data.ts[0]
         data.accel_ts = data.accel_ts - data.gyro_ts[0] + data.ts[0]
@@ -594,10 +599,8 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
         data.gyro_ts = data.gyro_ts + 100
         data.accel_ts = data.accel_ts + 100
     elif False:
-        data.gyro_ts = data.gyro_ts + 100 + (data.accel_ts - data.ts).mean()
-        data.accel_ts = data.accel_ts + 100 + (data.accel_ts - data.ts).mean()
-
-    print('!!!!!!!!!!!!', (data.accel_ts - data.ts).mean())
+        data.gyro_ts = data.gyro_ts + 100 - imu_ts_diff
+        data.accel_ts = data.accel_ts + 100 - imu_ts_diff
 
     # debug_data(data)
 
@@ -612,7 +615,7 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     opti_rel_500 = Utils.inv(opti.interpolate(opti.timestamp + 500, True).pose) @ opti.pose
     imu_rel_500 = Utils.inv(imu.interpolate(imu.timestamp + 500, False).pose) @ imu.pose
 
-    new_opti_ts, stat, res_out = time_sync(imu.timestamp, imu_rel_500, opti.timestamp, opti_rel_500)
+    new_opti_ts, stat, (res_out, ta_score, total_time_bias) = time_sync(imu.timestamp, imu_rel_500, opti.timestamp, opti_rel_500)
     # new_opti_ts, stat, res_out = time_sync(data.ts[len(data.ts)-len(imu_rel_500):], imu_rel_500, opti.timestamp, opti_rel_500)
 
 
@@ -637,16 +640,26 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
         outfile.write(','.join([capture_folder] + [f'{s:.06}' for s in res_out]))
 
     if doDump is True:
-        gt_out = 'gt'
-        os.makedirs(os.path.join(data.folder, gt_out), exist_ok=True)
-        #todo: avg, med...........
-        for pkl_path, gt_ts, gt_pose in zip(np.asarray(data.pkls)[data_ts_mask], gt_est.timestamp, gt_avg_est.pose):
+        gt_out = os.path.join('gt', os.path.basename(capture_folder))
+        os.makedirs(gt_out, exist_ok=True)
+        # todo: log file with temporal score and imu-ts diff
+
+        log_path = f'{gt_out}.txt'
+
+        with open(log_path, 'w') as f:
+            f.write(f'total time bias (ms): {total_time_bias}\n')
+            f.write(f'ta score (rad): {ta_score}\n')
+            f.write(f'imu ts diff (ms): {imu_ts_diff}\n')
+
+        for pkl_path, gt_ts, gt_pose in zip(np.asarray(data.pkls)[data_ts_mask], gt_est.timestamp, gt_est.pose):
             pkl = Utils.load_pkl(pkl_path)
             if pkl['ts'] == gt_ts:  # if all goes good should be always true
                 pkl['gt_pose'] = gt_pose.copy()
                 pkl['gt_pose'][..., :3, 3] *= 0.001
+                # print(gt_ts, pkl['gt_pose'][..., :3, 3])
+                # Utils.save_pkl((lambda x: os.path.join(x[0], gt_out, x[1]))(os.path.split(pkl_path)), pkl)
+                Utils.save_pkl((lambda x: os.path.join(gt_out, x[1]))(os.path.split(pkl_path)), pkl)
 
-                Utils.save_pkl((lambda x: os.path.join(x[0], gt_out, x[1]))(os.path.split(pkl_path)), pkl)
             else:
                 print('****** error', pkl_path, pkl['ts'], gt_ts)
 
@@ -783,6 +796,35 @@ def write_log_title(outfile):
 
 from glob import glob
 if __name__ == '__main__':
+
+    post_process(
+        r'C:\Users\rsheinin\record/20211202-152204',
+        r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish\gHc_nelder-mead-from-guess.pkl',
+        doEval=False, doDump=True,
+        evalDataPath=r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish',
+        outfile=None)
+    exit()
+
+    outfile = r'C:\Users\rsheinin\OneDrive - Intel Corporation\Desktop\opti-capture_tool\20211129.02\record\out1.csv'
+    input_list = glob(r'C:\Users\rsheinin\OneDrive - Intel Corporation\Desktop\opti-capture_tool\20211129.02\record\2021*')
+
+    with open(outfile, 'w') as ofile:
+        write_log_title(ofile)
+        # for f in [r'D:\mevolve\data\amr\from_inbal_for_correl\20211118-151916']:
+        for i, f in enumerate(input_list):
+            print('---------->', i)
+            try:
+                post_process(f,
+                             r'C:\Users\rsheinin\OneDrive - Intel Corporation\Desktop\opti-capture_tool\20211129.02\publish\gHc_nelder-mead-from-guess.pkl',
+                             doEval=True, doDump=False,
+                             evalDataPath=r'C:\Users\rsheinin\OneDrive - Intel Corporation\Desktop\opti-capture_tool\20211129.02\publish',
+                             outfile=ofile)
+            except:
+                ofile.write('~~~~~~~~ error~~~~~~~~~~\n')
+            print('=========>', i)
+
+
+    exit(0)
     outfile = r'\\optitrack.ger.corp.intel.com\GTService\25.11.21\20211125__old_ta__ag.csv'
     input_list = glob(r'\\optitrack.ger.corp.intel.com\GTService\25.11.21\20211125-*')
 
