@@ -442,7 +442,7 @@ if __name__ == '__main__':
                     with open(postprocess_csv, 'a') as outfile:
                         post_process(output_folder,
                                      ghc_path,
-                                     doEval=False,
+                                     doEval=True,
                                      doDump=True,
                                      evalDataPath=gt_raw,
                                      outfile=outfile)
