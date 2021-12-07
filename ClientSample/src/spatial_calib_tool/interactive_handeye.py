@@ -267,7 +267,8 @@ def update_ghc(ghc_dict, bHg, wHc):
 
 
 def publish_calib(color_cam_mat, color_cam_dist, color2depth, ghc_dict, args, test_case):
-    for o in [osp.join(args.res_folder, test_case), args.publish_folder]:
+    publish_folder = osp.join(args.publish_folder, args.opti_rigid_body)
+    for o in [osp.join(args.res_folder, test_case, args.opti_rigid_body), publish_folder]:
         save_metadata(
             o,
             color_cam_mat, color_cam_dist, color2depth,
@@ -278,7 +279,7 @@ def publish_calib(color_cam_mat, color_cam_dist, color2depth, ghc_dict, args, te
             with open(osp.join(o, f'gHc_{n}.pkl'), 'wb') as f:
                 pickle.dump(ghc_dict[n]['mat'], f)
 
-    print('******** NOTE: calib updated at', args.publish_folder)
+    print('******** NOTE: calib updated at', publish_folder)
 
 
 
