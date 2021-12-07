@@ -255,7 +255,7 @@ class WorkerZICC(threading.Thread):
 #     PHASE_STAT_II = 3
 #     PHASE_RECORD_MOVE = 4
 
-__VERSION__ = '1.0.6.7'
+__VERSION__ = '1.0.6.8'
 description = [
     'opti',
     'post process',
@@ -264,7 +264,8 @@ description = [
     'filter opti average',
     'ta based rel rotation 50',
     'do dump',
-    'no cb eval'
+    'with cb eval',
+    'calc imu-cam ts diff'
 ]
 
 if __name__ == '__main__':

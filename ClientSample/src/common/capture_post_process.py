@@ -159,12 +159,16 @@ class Trajectory:
 
 def calc_imu_rotation(accel_ts_, accel_, gyro_ts_, gyro_):
     gyro_mask = gyro_ts_[1:] != gyro_ts_[:-1]
+    # gyro_ts = gyro_ts_[1:][gyro_mask]
+    # gyro = gyro_[1:][gyro_mask]
     gyro_ts = gyro_ts_[:-1][gyro_mask]
     gyro = gyro_[:-1][gyro_mask]
     gyro_sec_diff = np.diff(np.asarray(gyro_ts)) / 1000
     gyro_euler = (np.asarray(gyro)[1:] * gyro_sec_diff[..., None])
 
     accel_mask = accel_ts_[1:] != accel_ts_[:-1]
+    # accel_ts = accel_ts_[1:][accel_mask]
+    # accel = accel_[1:][accel_mask]
     accel_ts = accel_ts_[:-1][accel_mask]
     accel = accel_[:-1][accel_mask]
     z = np.arctan2(accel[:, 1], accel[:, 2])
@@ -626,6 +630,7 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     ghc = Utils.load_pkl(ghc_path)
     offset = 1000 / 30
     offset = imu.timestamp[0] - data.ts[0]
+    offset = 100
     offset = 0
 
     data_ts_mask = data.ts > (stat[1][1] - 1000)
@@ -681,6 +686,22 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
                     color_pose += [im_pose.get_pose(c)]
             color_pose = np.asarray([Utils.inv(p[0]) if p[0] is not None else np.eye(4) * np.nan for p in color_pose])
 
+        new_stat = find_static_phase(opti.timestamp - opti.timestamp[0],
+                                 scipy.signal.medfilt(Utils.matrix2mag(opti.pose), 9))
+        cpft = Trajectory(data.ts, color_pose)
+        cpft_rel_500 = Utils.inv(cpft.interpolate(cpft.timestamp + 500).pose) @ cpft.pose
+        # x = sync_time_phase2(
+        #     cfpt.timestamp - cfpt.timestamp[0], Utils.matrix2mag(cfpt_rel_500),
+        #     opti.timestamp - opti.timestamp[0], Utils.matrix2mag(opti_rel_500),
+        #     new_stat)
+        _, (_, imu_cam_diff, _) = sync_time_phase2(
+            cpft.timestamp - cpft.timestamp[0], Utils.matrix2mag(cpft_rel_500),
+            imu.timestamp - imu.timestamp[0], Utils.matrix2mag(imu_rel_500), new_stat)
+
+        print('imu_cam_diff (ms)', imu_cam_diff)
+
+
+
         cpt_orig_mask = (data.ts > stat[1][0] + 200) & (data.ts < stat[1][1] - 200)
         cpt_orig_mat = Utils.average_transformation(color_pose[cpt_orig_mask])
         cpt = Trajectory(data.ts[data_ts_mask], color_pose[data_ts_mask])
@@ -705,7 +726,8 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
         print('RMSE error (trans) (median opti)', trans_med_rmse)
 
         if outfile is not None:
-            outfile.write(f',{trans_rmse:.06},{rot_rmse:.06},{trans_avg_rmse:.06},{rot_avg_rmse:.06},{trans_med_rmse:.06},{rot_med_rmse:.06}')
+            # outfile.write(f',{trans_rmse:.06},{rot_rmse:.06},{trans_avg_rmse:.06},{rot_avg_rmse:.06},{trans_med_rmse:.06},{rot_med_rmse:.06}')
+            outfile.write(','.join(f'{m:.06f}'for m in [trans_rmse,rot_rmse,trans_avg_rmse,rot_avg_rmse,trans_med_rmse,rot_med_rmse, imu_cam_diff]))
 
         if False:
             cpt_rel_500 = Utils.inv(cpt.interpolate(cpt.timestamp + 500).pose) @ cpt.pose
@@ -791,18 +813,20 @@ def write_log_title(outfile):
         'rot (avg) RMSE',
         'trans (median) RMSE',
         'rot (median) RMSE',
+        'imu_cam_bias',
     ]) + '\n')
 
 
 from glob import glob
 if __name__ == '__main__':
 
-    post_process(
-        r'C:\Users\rsheinin\record/20211202-152204',
-        r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish\gHc_nelder-mead-from-guess.pkl',
-        doEval=False, doDump=True,
-        evalDataPath=r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish',
-        outfile=None)
+    with open('deb_out.csv', 'w') as of:
+        post_process(
+            r'\\optitrack.ger.corp.intel.com\GTService\06_12_2021\record\20211206-150200',
+            r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish\gHc_nelder-mead-from-guess.pkl',
+            doEval=True, doDump=True,
+            evalDataPath=r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish',
+            outfile=of)
     exit()
 
     outfile = r'C:\Users\rsheinin\OneDrive - Intel Corporation\Desktop\opti-capture_tool\20211129.02\record\out1.csv'
