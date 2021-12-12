@@ -255,7 +255,7 @@ class WorkerZICC(threading.Thread):
 #     PHASE_STAT_II = 3
 #     PHASE_RECORD_MOVE = 4
 
-__VERSION__ = '1.0.6.9'
+__VERSION__ = '1.0.6.11'
 description = [
     'opti',
     'post process',
@@ -264,8 +264,10 @@ description = [
     'filter opti average',
     'ta based rel rotation 50',
     'do dump',
-    'no cb eval',
-    'calc imu-cam ts diff'
+    'do cb eval',
+    'calc imu-cam ts diff',
+    'various opti rigid support',
+    '100 ms workaround'
 ]
 
 if __name__ == '__main__':
@@ -275,11 +277,12 @@ if __name__ == '__main__':
     default_output_folder = os.path.join(os.path.expanduser("~"), "record")
     parser.add_argument("-o-", "--output_folder", type=str, default=default_output_folder, required=False)
     parser.add_argument("--opti", default=False, action='store_true')
-    parser.add_argument("--ghc_path", type=str, default=r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish\gHc_nelder-mead-from-guess.pkl', required=False)
+    parser.add_argument("--opti_rigid", default='AMR_101')
+    parser.add_argument("--ghc_name", type=str, default=r'gHc_nelder-mead-from-guess.pkl', required=False)
     parser.add_argument("--gt_raw", type=str, default=r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish', required=False)
     args = parser.parse_args()
 
-    ghc_path = args.ghc_path
+    ghc_path = os.path.join(args.gt_raw, args.opti_rigid, args.ghc_name)
     gt_raw = args.gt_raw
     base_output_folder = args.output_folder
     output_folder = None
@@ -288,7 +291,7 @@ if __name__ == '__main__':
     postprocess_csv = None
     optiClient = None
     if args.opti:
-        optiClient = OptitrackClient()
+        optiClient = OptitrackClient(rigid_body=args.opti_rigid)
         optiClient.rb_init()
 
         postprocess_csv = os.path.abspath(f'{base_output_folder}_{datetime.now().strftime("%Y%m%d-%H%M%S")}.csv')
@@ -442,7 +445,7 @@ if __name__ == '__main__':
                     with open(postprocess_csv, 'a') as outfile:
                         post_process(output_folder,
                                      ghc_path,
-                                     doEval=False,
+                                     doEval=True,
                                      doDump=True,
                                      evalDataPath=gt_raw,
                                      outfile=outfile)

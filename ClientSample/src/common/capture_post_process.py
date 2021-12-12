@@ -599,7 +599,7 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     if False:
         data.gyro_ts = data.gyro_ts - data.gyro_ts[0] + data.ts[0]
         data.accel_ts = data.accel_ts - data.gyro_ts[0] + data.ts[0]
-    elif False:
+    elif True:
         data.gyro_ts = data.gyro_ts + 100
         data.accel_ts = data.accel_ts + 100
     elif False:
@@ -727,7 +727,8 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
 
         if outfile is not None:
             # outfile.write(f',{trans_rmse:.06},{rot_rmse:.06},{trans_avg_rmse:.06},{rot_avg_rmse:.06},{trans_med_rmse:.06},{rot_med_rmse:.06}')
-            outfile.write(','.join(f'{m:.06f}'for m in [trans_rmse,rot_rmse,trans_avg_rmse,rot_avg_rmse,trans_med_rmse,rot_med_rmse, imu_cam_diff]))
+            outfile.write(',' + ','.join(f'{m:.06f}'for m in [
+                trans_rmse, rot_rmse, trans_avg_rmse, rot_avg_rmse, trans_med_rmse, rot_med_rmse, imu_cam_diff]))
 
         if False:
             cpt_rel_500 = Utils.inv(cpt.interpolate(cpt.timestamp + 500).pose) @ cpt.pose
@@ -821,6 +822,7 @@ from glob import glob
 if __name__ == '__main__':
 
     with open('deb_out.csv', 'w') as of:
+        write_log_title(of)
         post_process(
             r'\\optitrack.ger.corp.intel.com\GTService\06_12_2021\record\20211206-150200',
             r'\\optitrack.ger.corp.intel.com\GTService\amr-dc-data\publish\gHc_nelder-mead-from-guess.pkl',
