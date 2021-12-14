@@ -130,6 +130,14 @@ class Trajectory:
         return Trajectory(self.timestamp, Utils.inv(calib) @ self.rel(orig=orig) @ calib)
         return Trajectory(self.timestamp, orig @ Utils.inv(calib) @ self.rel() @ calib)
 
+    def rel_project(self, calib=np.eye(4), orig=np.eye(4)):
+        traj = self.global_project(calib)
+        traj.pose = traj.rel(orig=orig @ calib)
+        return traj
+
+    def global_project(self, calib=np.eye(4)):
+        return Trajectory(self.timestamp, self.pose @ calib)
+
     def interpolate(self, ts, doTrnasInterp=True):
         slerp = Slerp(self.timestamp, R.from_matrix(self.pose[:, :3, :3]))
         valid_mask = (ts > self.timestamp.min()) & (ts < self.timestamp.max())
@@ -637,13 +645,20 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
     opti_orig_mask = (new_opti_ts > stat[1][0] + 200) & (new_opti_ts < stat[1][1] - 200)
     opti_orig_mat = Utils.average_transformation(opti_data.pose[opti_orig_mask])
 
-    gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
-    gt_avg_est = Trajectory(new_opti_ts + offset, opti_data.avg_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
-    gt_med_est = Trajectory(new_opti_ts + offset, opti_data.med_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+    # gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+    # gt_avg_est = Trajectory(new_opti_ts + offset, opti_data.avg_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+    # gt_med_est = Trajectory(new_opti_ts + offset, opti_data.med_pose.copy()).project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+
+    gt_est = Trajectory(new_opti_ts + offset, opti_data.pose.copy()).rel_project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+    gt_avg_est = Trajectory(new_opti_ts + offset, opti_data.avg_pose.copy()).rel_project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+    gt_med_est = Trajectory(new_opti_ts + offset, opti_data.med_pose.copy()).rel_project(ghc, orig=opti_orig_mat).interpolate(data.ts[data_ts_mask])
+
+    gt_avg_est_global = Trajectory(new_opti_ts + offset, opti_data.avg_pose.copy()).global_project(ghc).interpolate(data.ts[data_ts_mask])
 
     if outfile is not None:
         outfile.write(','.join([capture_folder] + [f'{s:.06}' for s in res_out]))
 
+    data_locs = [capture_folder]
     if doDump is True:
         gt_out = os.path.join('gt', os.path.basename(capture_folder))
         os.makedirs(gt_out, exist_ok=True)
@@ -651,16 +666,22 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
 
         log_path = f'{gt_out}.txt'
 
+        data_locs += [gt_out, log_path]
+
         with open(log_path, 'w') as f:
             f.write(f'total time bias (ms): {total_time_bias}\n')
             f.write(f'ta score (rad): {ta_score}\n')
             f.write(f'imu ts diff (ms): {imu_ts_diff}\n')
 
-        for pkl_path, gt_ts, gt_pose in zip(np.asarray(data.pkls)[data_ts_mask], gt_est.timestamp, gt_est.pose):
+        for pkl_path, gt_ts, gt_pose, global_gt_pose in zip(
+                np.asarray(data.pkls)[data_ts_mask],
+                gt_avg_est.timestamp, gt_avg_est.pose, gt_avg_est_global.pose):
             pkl = Utils.load_pkl(pkl_path)
             if pkl['ts'] == gt_ts:  # if all goes good should be always true
                 pkl['gt_pose'] = gt_pose.copy()
                 pkl['gt_pose'][..., :3, 3] *= 0.001
+                pkl['global_gt_pose'] = global_gt_pose.copy()
+                pkl['global_gt_pose'][..., :3, 3] *= 0.001
                 # print(gt_ts, pkl['gt_pose'][..., :3, 3])
                 # Utils.save_pkl((lambda x: os.path.join(x[0], gt_out, x[1]))(os.path.split(pkl_path)), pkl)
                 Utils.save_pkl((lambda x: os.path.join(gt_out, x[1]))(os.path.split(pkl_path)), pkl)
@@ -730,7 +751,7 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
             outfile.write(',' + ','.join(f'{m:.06f}'for m in [
                 trans_rmse, rot_rmse, trans_avg_rmse, rot_avg_rmse, trans_med_rmse, rot_med_rmse, imu_cam_diff]))
 
-        if False:
+        if True:
             cpt_rel_500 = Utils.inv(cpt.interpolate(cpt.timestamp + 500).pose) @ cpt.pose
             gt_rel_500 = Utils.inv(gt_avg_est.interpolate(gt_avg_est.timestamp + 500).pose) @ gt_est.pose
 
@@ -787,6 +808,11 @@ def post_process(capture_folder, ghc_path, doEval=False, evalDataPath=None, doDu
             outfile.write('\n')
             outfile.flush()
 
+    print('-----------------> data to remove if need to re-take:')
+    for loc in data_locs:
+        print(loc)
+    print('-----------------------------------------------------')
+
     # todo: drop gt_est to
 
 
@@ -819,9 +845,10 @@ def write_log_title(outfile):
 
 
 from glob import glob
+from datetime import datetime
 if __name__ == '__main__':
 
-    with open('deb_out.csv', 'w') as of:
+    with open(f'deb_out_{datetime.now().strftime("%Y%m%d-%H%M%S")}.csv', 'w') as of:
         write_log_title(of)
         post_process(
             r'\\optitrack.ger.corp.intel.com\GTService\06_12_2021\record\20211206-150200',
