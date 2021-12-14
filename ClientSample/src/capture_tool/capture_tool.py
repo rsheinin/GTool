@@ -255,7 +255,7 @@ class WorkerZICC(threading.Thread):
 #     PHASE_STAT_II = 3
 #     PHASE_RECORD_MOVE = 4
 
-__VERSION__ = '1.0.6.11'
+__VERSION__ = '1.0.6.12'
 description = [
     'opti',
     'post process',
@@ -264,7 +264,7 @@ description = [
     'filter opti average',
     'ta based rel rotation 50',
     'do dump',
-    'do cb eval',
+    'no cb eval',
     'calc imu-cam ts diff',
     'various opti rigid support',
     '100 ms workaround'
@@ -445,7 +445,7 @@ if __name__ == '__main__':
                     with open(postprocess_csv, 'a') as outfile:
                         post_process(output_folder,
                                      ghc_path,
-                                     doEval=True,
+                                     doEval=False,
                                      doDump=True,
                                      evalDataPath=gt_raw,
                                      outfile=outfile)
